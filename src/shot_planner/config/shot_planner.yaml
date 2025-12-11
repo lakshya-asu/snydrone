@@ -1,0 +1,3 @@
+shot_planner:
+  ros__parameters:
+    path_frame_id: "map"

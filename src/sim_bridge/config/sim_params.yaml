@@ -1,0 +1,4 @@
+sim_bridge:
+  ros__parameters:
+    # Placeholder for simulation-related params (e.g., world name, ports).
+    dummy_param: true

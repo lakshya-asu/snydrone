@@ -1,0 +1,4 @@
+traj_follower:
+  ros__parameters:
+    # Future parameters for PX4 connection (UDP URL, modes, etc.) go here.
+    dummy_param: true

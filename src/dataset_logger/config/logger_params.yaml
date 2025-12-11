@@ -1,0 +1,4 @@
+dataset_logger:
+  ros__parameters:
+    # Placeholder configuration for future logging options.
+    dummy_param: true
