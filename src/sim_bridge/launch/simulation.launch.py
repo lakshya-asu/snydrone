@@ -1,14 +1,3 @@
-from launch import LaunchDescription
-from launch_ros.actions import Node
-
-
-def generate_launch_description():
-    """Launch the full Snydrone stack in simulation.
-
-    NOTE: This is just the ROS 2 nodes. PX4 SITL and Isaac Sim / Pegasus
-    are not started here yet; you'll hook those in later.
-    """
-
     nodes = [
         Node(
             package="llm_agent",
@@ -29,6 +18,12 @@ def generate_launch_description():
             output="screen",
         ),
         Node(
+            package="snydrone_camera",
+            executable="camera_stub_node",
+            name="camera_stub",
+            output="screen",
+        ),
+        Node(
             package="traj_follower",
             executable="traj_follower_node",
             name="traj_follower",
@@ -41,10 +36,3 @@ def generate_launch_description():
             output="screen",
         ),
     ]
-
-    ld = LaunchDescription(nodes)
-
-    # TODO: Add ExecuteProcess actions here to start PX4 SITL and Isaac Sim
-    # when running on your Linux dev machine.
-
-    return ld

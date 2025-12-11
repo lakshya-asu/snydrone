@@ -6,17 +6,17 @@ import os
 
 def generate_launch_description():
     config = os.path.join(
-        get_package_share_directory("traj_follower"),
+        get_package_share_directory("snydrone_camera"),
         "config",
-        "traj_follower.yaml",
+        "camera_stub.yaml",
     )
 
     return LaunchDescription(
         [
             Node(
-                package="traj_follower",
-                executable="traj_follower_node",
-                name="traj_follower",
+                package="snydrone_camera",
+                executable="camera_stub_node",
+                name="camera_stub",
                 output="screen",
                 parameters=[config],
             )

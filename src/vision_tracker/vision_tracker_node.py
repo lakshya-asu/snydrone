@@ -2,6 +2,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point, Vector3
+from sensor_msgs.msg import Image
 from snydrone_msgs.msg import TargetState
 
 
@@ -17,6 +18,14 @@ class VisionTrackerNode(Node):
         self.declare_parameter("publish_rate_hz", 10.0)
         rate = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
         self.target_pub = self.create_publisher(TargetState, "target", 10)
+        self.img_count = 0
+        self.img_sub = self.create_subscription(
+            Image,
+            "snydrone/camera/color/image_raw",
+            self.img_callback,
+            10,
+        )
+
         self.t = 0.0
         self.timer = self.create_timer(1.0 / rate, self._on_timer)
         self.get_logger().info("Vision tracker node started (dummy implementation).")
@@ -38,6 +47,13 @@ class VisionTrackerNode(Node):
         msg.frame_error_x = 0.0
         msg.frame_error_y = 0.0
         self.target_pub.publish(msg)
+
+        def img_callback(self, msg: Image) -> None:
+        # For now we just count frames; real vision will come later.
+            self.img_count += 1
+            if self.img_count % 30 == 0:
+                self.get_logger().info(f"Vision tracker saw {self.img_count} images.")
+
 
 
 def main(args=None) -> None:

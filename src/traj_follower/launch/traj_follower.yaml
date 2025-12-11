@@ -1,4 +1,13 @@
 traj_follower:
   ros__parameters:
-    # Future parameters for PX4 connection (UDP URL, modes, etc.) go here.
-    dummy_param: true
+    # Turn this on once you have PX4 SITL + MAVSDK working on Linux
+    enable_mavsdk: false
+
+    # MAVSDK connection URL (default PX4 SITL)
+    mavsdk_url: "udp://:14540"
+
+    # Offboard setpoint stream rate (Hz)
+    offboard_rate_hz: 20.0
+
+    # Default altitude in NED frame (negative = up); used if Path z is 0
+    default_altitude_ned: -3.0

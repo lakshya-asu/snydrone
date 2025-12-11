@@ -15,8 +15,9 @@ class DatasetLoggerNode(Node):
     def __init__(self) -> None:
         super().__init__("dataset_logger")
         self.img_sub = self.create_subscription(
-            Image, "camera/image_raw", self.img_callback, 10
+        Image, "snydrone/camera/color/image_raw", self.img_callback, 10
         )
+
         self.target_sub = self.create_subscription(
             TargetState, "target", self.target_callback, 10
         )
