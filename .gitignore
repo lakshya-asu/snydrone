@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# ROS 2 / colcon
+build/
+install/
+log/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/src/build/
+ros2_ws/src/install/
+
+# Editors
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local envs
+.venv/
+venv/
+env/
+
+# Model weights and large local assets
+*.pt
+*.pth
+*.onnx
+
+# Simulation / vendor installs that should not live in this repo
+isaacsim/
+drone_stack/
+PegasusSimulator/
+isaac_ros_ws/
+
+# Generated media / caches
+*.bag
+*.db
+*.sqlite3
+*.mp4
+*.avi
+*.mkv

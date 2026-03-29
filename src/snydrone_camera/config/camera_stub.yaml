@@ -1,6 +1,0 @@
-snydrone_camera:
-  ros__parameters:
-    width: 640
-    height: 480
-    fps: 10.0
-    frame_id: "snydrone_camera"
