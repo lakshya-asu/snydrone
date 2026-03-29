@@ -1,4 +1,4 @@
-# SnyDrone
+# snydrone
 
 <p align="center">
   <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>
@@ -9,9 +9,9 @@
   <img alt="Status" src="https://img.shields.io/badge/status-prototype-orange">
 </p>
 
-SnyDrone is an autonomous aerial cinematography project built with ROS 2, PX4 offboard control, Isaac Sim, Pegasus, and onboard vision. The goal is to let a user describe a camera shot in natural language and have the drone plan and execute that shot around a target in simulation.
+snydrone is an autonomous aerial cinematography project built with ROS 2, PX4 offboard control, Isaac Sim, Pegasus, and onboard vision. The goal is to let a user describe a camera shot in natural language and have the drone plan and execute that shot around a target in simulation.
 
-This project focuses on cinematic intent rather than raw waypoint following. Instead of manually flying an orbit or reveal, SnyDrone translates a prompt such as:
+This project focuses on cinematic intent rather than raw waypoint following. Instead of manually flying an orbit or reveal, snydrone translates a prompt such as:
 
 ```text
 orbit the target at 4 meters radius, 3 meters high, for 12 seconds
@@ -21,7 +21,7 @@ into a structured shot specification, generates a trajectory around the subject,
 
 ## Research Focus
 
-SnyDrone explores a robotics question that is usually left to human pilots and camera operators:
+snydrone explores a robotics question that is usually left to human pilots and camera operators:
 
 **can a drone understand cinematic intent and translate it into controllable motion around a subject?**
 
@@ -34,7 +34,7 @@ The project treats aerial filming as a full-stack autonomy problem that combines
 - simulation
 - perception
 
-Rather than optimizing only for navigation accuracy, SnyDrone is built around shot structure, framing, and target-relative motion.
+Rather than optimizing only for navigation accuracy, snydrone is built around shot structure, framing, and target-relative motion.
 
 ## Project Overview
 
@@ -89,7 +89,7 @@ This work brings together several pieces that are often developed separately:
 - a perception module that estimates target location from the onboard camera feed
 - a simulation environment that makes the full pipeline testable end to end
 
-Taken together, these components make SnyDrone a compact research platform for autonomous aerial cinematography.
+Taken together, these components make snydrone a compact research platform for autonomous aerial cinematography.
 
 ## Runtime Flow
 
@@ -237,7 +237,7 @@ The README diagrams above show the control and software flow that connect those 
 
 ## Current State
 
-SnyDrone is currently a simulation-first prototype, but the main architecture is already implemented:
+snydrone is currently a simulation-first prototype, but the main architecture is already implemented:
 
 - prompt-to-shot planning
 - live trajectory generation
@@ -249,7 +249,7 @@ The project is designed so that shot quality, target tracking, and safety logic 
 
 ## Why It Matters
 
-SnyDrone is intended as a foundation for autonomous filming systems that are easier for humans to direct. It is relevant to:
+snydrone is intended as a foundation for autonomous filming systems that are easier for humans to direct. It is relevant to:
 
 - creative robotics
 - human-robot interaction
