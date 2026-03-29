@@ -1,10 +1,6 @@
 # SnyDrone
 
 <p align="center">
-  <img src="assets/readme/hero.svg" alt="SnyDrone project overview" width="100%" />
-</p>
-
-<p align="center">
   <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="https://docs.ros.org/en/humble/index.html"><img alt="ROS 2 Humble" src="https://img.shields.io/badge/ROS%202-Humble-22314E?logo=ros&logoColor=white"></a>
   <a href="https://px4.io/"><img alt="PX4 Offboard" src="https://img.shields.io/badge/PX4-Offboard-AE1C28?logo=px4&logoColor=white"></a>
@@ -13,128 +9,87 @@
   <img alt="Status" src="https://img.shields.io/badge/status-prototype-orange">
 </p>
 
-SnyDrone is an autonomous aerial cinematography stack that turns natural-language shot requests into simulated drone motion. It combines ROS 2, PX4 offboard control, Isaac Sim, Pegasus, and onboard vision to explore a simple idea:
+SnyDrone is an autonomous aerial cinematography project built with ROS 2, PX4 offboard control, Isaac Sim, Pegasus, and onboard vision. The goal is to let a user describe a camera shot in natural language and have the drone plan and execute that shot around a target in simulation.
 
-**tell the drone what shot you want, and let the system plan and execute it.**
-
-The repo is now organized as a cleaned project workspace, not a giant machine-local dump. It contains the first-party ROS 2 packages, simulation entry points, and helper scripts that make up the real SnyDrone system.
-
-## Why This Exists
-
-Most drone software stacks are built around navigation, mapping, or low-level autonomy. SnyDrone is about **camera intent**.
-
-Instead of manually flying waypoints to capture a nice orbit, reveal, or follow shot, the goal is to let a user say something like:
+This project focuses on cinematic intent rather than raw waypoint following. Instead of manually flying an orbit or reveal, SnyDrone translates a prompt such as:
 
 ```text
 orbit the target at 4 meters radius, 3 meters high, for 12 seconds
 ```
 
-SnyDrone then:
+into a structured shot specification, generates a trajectory around the subject, and sends the resulting commands through a PX4 offboard pipeline.
 
-- interprets the request into a structured shot specification,
-- generates time-varying pose setpoints around a target,
-- converts those setpoints into PX4 offboard commands,
-- and executes the motion in simulation with a camera-equipped drone.
+## Research Focus
 
-That makes this project interesting as a robotics system, a human-drone interaction system, and a creative AI interface.
+SnyDrone explores a robotics question that is usually left to human pilots and camera operators:
 
-## What It Does Right Now
+**can a drone understand cinematic intent and translate it into controllable motion around a subject?**
 
-The current workspace already implements the main autonomy loop:
+The project treats aerial filming as a full-stack autonomy problem that combines:
 
-- prompt ingestion on `/snydrone/shot/prompt`
-- rule-based or LLM-backed shot planning to `/snydrone/shot/spec`
-- shot execution into `/snydrone/setpoint/pose`
-- ROS 2 to PX4 offboard bridging with ENU to NED conversion
-- Isaac Sim scene startup with Pegasus and PX4 backend wiring
-- moving target publication on `/snydrone/target/pose`
-- monocular onboard camera publishing
-- YOLO-based detection for target localization and future closed-loop tracking
+- human-language input
+- shot representation
+- trajectory generation
+- flight control
+- simulation
+- perception
 
-In short, the system already demonstrates:
+Rather than optimizing only for navigation accuracy, SnyDrone is built around shot structure, framing, and target-relative motion.
 
-`natural language -> shot spec -> pose setpoints -> PX4 offboard control -> cinematic motion in sim`
+## Project Overview
 
-## Architecture
+The system is split into clear layers:
+
+- a planner that converts prompt text into shot parameters
+- a shot executor that turns those parameters into pose setpoints
+- a PX4 bridge that converts ROS 2 poses into PX4 trajectory commands
+- a simulation layer that provides the drone, target, and camera stream
+- a vision layer that detects and localizes the target from onboard imagery
+
+That gives the project an end-to-end flow:
+
+`natural language -> shot spec -> trajectory setpoints -> PX4 offboard control -> simulated drone motion`
+
+## System Architecture
 
 ```mermaid
 flowchart LR
     A["User Prompt<br/>/snydrone/shot/prompt"] --> B["Planner<br/>rule-based or LLM"]
     B --> C["Shot Spec JSON<br/>/snydrone/shot/spec"]
-    C --> D["Shot Executor<br/>orbit / hold / timing / yaw"]
+    C --> D["Shot Executor<br/>orbit / hold / yaw / timing"]
     E["Target Pose<br/>/snydrone/target/pose"] --> D
     D --> F["Desired Drone Pose<br/>/snydrone/setpoint/pose"]
     F --> G["PX4 Offboard Adapter<br/>ENU to NED + mode / arm"]
-    G --> H["PX4 / Pegasus / Isaac Sim"]
-    H --> I["Camera Stream"]
-    I --> J["Vision Tracker"]
-    J -. future closed-loop framing .-> D
+    G --> H["PX4 + Pegasus + Isaac Sim"]
+    H --> I["Onboard Camera Stream"]
+    I --> J["YOLO Tracker"]
 ```
 
-## Repo Layout
+## What I Built
 
-```text
-.
-├── assets/
-│   └── readme/
-│       └── hero.svg
-├── ros2_ws/
-│   └── src/
-│       ├── px4_msgs/
-│       ├── snydrone_brain/
-│       ├── snydrone_bringup/
-│       ├── snydrone_px4/
-│       ├── snydrone_shots/
-│       ├── snydrone_topic_tools/
-│       └── snydrone_vision/
-├── snydrone_sim/
-│   └── run_isaac.py
-├── list_prims.py
-├── test_cam.py
-└── test_og.py
-```
+The repository includes the core pieces needed to demonstrate autonomous cinematic flight in simulation:
 
-## Core Packages
+- a prompt-driven planning layer with both rule-based and LLM-backed options
+- a shot execution node that produces live pose setpoints around a target
+- a PX4 offboard adapter that handles coordinate conversion and setpoint publishing
+- a simulation entry point that launches the drone, target, environment, and camera pipeline
+- a vision tracker that runs YOLO or YOLO-World to estimate target location from the drone camera
+- a bringup package that launches the main control loop
 
-### `snydrone_brain`
+The current implementation already supports the main idea of the project: describing a shot at a high level and converting that description into drone motion.
 
-High-level planning and shot execution.
+## Key Contributions
 
-- `shot_planner_node.py`: rule-based natural-language parsing
-- `llm_planner_node.py`: Anthropic-backed prompt-to-JSON planner
-- `shot_executor_node.py`: generates live pose setpoints from the shot spec and target pose
+This work brings together several pieces that are often developed separately:
 
-### `snydrone_px4`
+- a natural-language interface for cinematic shot requests
+- a structured shot representation that can be consumed by downstream control nodes
+- a target-relative trajectory generation pipeline for orbit-style filming
+- a ROS 2 to PX4 offboard bridge for simulated drone execution
+- a perception module that estimates target location from the onboard camera feed
+- a simulation environment that makes the full pipeline testable end to end
 
-The ROS 2 to PX4 bridge.
-
-- `px4_offboard_adapter_node.py`: converts `PoseStamped` setpoints into PX4 `TrajectorySetpoint`, publishes `OffboardControlMode`, and can auto-arm / enter offboard mode
-
-### `snydrone_shots`
-
-Shot and visualization utilities.
-
-- `target_pose_node.py`: fixed target publisher for early testing
-- `orbit_shot_node.py`: direct orbit primitive
-- `path_trail_node.py`: publishes a path trail for setpoint visualization
-
-### `snydrone_vision`
-
-Perception layer.
-
-- `tracker_node.py`: YOLO / YOLO-World based target detection from the drone camera stream, publishing normalized image-space target location
-
-### `snydrone_topic_tools`
-
-Topic wiring helpers.
-
-- `image_relay_node.py`: relays image and camera info topics into the SnyDrone naming scheme
-
-### `snydrone_bringup`
-
-Launch entry points.
-
-- `snydrone_core.launch.py`: starts the planner, shot executor, and PX4 bridge together
+Taken together, these components make SnyDrone a compact research platform for autonomous aerial cinematography.
 
 ## Runtime Flow
 
@@ -148,27 +103,97 @@ sequenceDiagram
     participant V as Vision
 
     U->>P: Publish shot prompt
-    P->>E: JSON shot spec
+    P->>E: Shot spec JSON
     S->>E: Target pose
     E->>X: PoseStamped setpoints
     X->>S: Offboard mode + trajectory setpoints
     S-->>V: Camera frames
-    V-->>E: Target localization (future tighter loop)
+    V-->>S: Target estimate for tracking
 ```
 
-## Workspace Setup
+## Workspace Layout
 
-This repository intentionally does **not** vendor your local Isaac Sim install, PX4 clone, or Pegasus checkout. Those are too large and too machine-specific for GitHub. The repo holds the project code; external simulators and toolchains should be installed separately on the machine that runs the stack.
+```text
+.
+├── ros2_ws/
+│   └── src/
+│       ├── px4_msgs/
+│       ├── snydrone_brain/
+│       ├── snydrone_bringup/
+│       ├── snydrone_px4/
+│       ├── snydrone_shots/
+│       ├── snydrone_topic_tools/
+│       └── snydrone_vision/
+├── snydrone_sim/
+│   └── run_isaac.py
+```
 
-At a high level, you need:
+## Package Breakdown
 
-- ROS 2 Humble
-- PX4 Autopilot available locally
-- Isaac Sim installed locally
-- Pegasus Simulator available locally
-- Python dependencies for Ultralytics and Anthropic if you use those nodes
+### `snydrone_brain`
 
-## Quick Start
+This package contains the planning and execution logic.
+
+- `shot_planner_node.py` parses simple natural-language prompts into structured shot JSON.
+- `llm_planner_node.py` uses Anthropic to generate a stricter shot specification from free-form language.
+- `shot_executor_node.py` consumes the shot spec and target pose and publishes the desired drone pose at runtime.
+
+### `snydrone_px4`
+
+This package connects the planner output to PX4.
+
+- `px4_offboard_adapter_node.py` listens for `PoseStamped` setpoints, converts them from ENU to NED, and publishes PX4 offboard messages and trajectory setpoints.
+
+### `snydrone_shots`
+
+This package contains shot utilities and trajectory helpers.
+
+- `target_pose_node.py` publishes a target pose for testing.
+- `orbit_shot_node.py` generates a direct orbit around the target.
+- `path_trail_node.py` publishes a `Path` message for visualizing generated setpoints.
+
+### `snydrone_vision`
+
+This package contains the perception layer.
+
+- `tracker_node.py` runs YOLO-based detection on the drone camera stream and publishes normalized target coordinates plus annotated images.
+
+### `snydrone_topic_tools`
+
+This package contains topic adapters.
+
+- `image_relay_node.py` relays image and camera info topics into the naming scheme used by the rest of the system.
+
+### `snydrone_bringup`
+
+This package launches the core runtime.
+
+- `snydrone_core.launch.py` starts the planner, shot executor, and PX4 bridge.
+
+## Simulation
+
+The simulation scene is launched from `snydrone_sim/run_isaac.py`. It sets up:
+
+- a Pegasus multirotor with PX4 backend integration
+- an Isaac Sim warehouse environment
+- a moving target object to film
+- ROS 2 publication of target pose
+- an onboard camera stream for perception and debugging
+
+This setup makes it possible to test the full autonomy loop before moving toward hardware.
+
+## Method
+
+At runtime, the system operates in four stages:
+
+1. A user publishes a shot prompt describing the desired camera behavior.
+2. The planner converts that prompt into a structured specification containing parameters such as shot type, radius, height, speed, direction, and duration.
+3. The executor combines the shot specification with the target pose and generates a continuous stream of desired drone poses.
+4. The PX4 adapter converts those poses into offboard trajectory commands that can be executed in simulation.
+
+This separation makes the system easier to extend. New shot types can be added at the planning or execution level without redesigning the PX4 interface or simulation stack.
+
+## How To Use
 
 Build the ROS 2 workspace:
 
@@ -179,13 +204,13 @@ colcon build
 source install/setup.bash
 ```
 
-Launch the Isaac Sim scene:
+Launch the simulation:
 
 ```bash
 python3 snydrone_sim/run_isaac.py
 ```
 
-In another terminal, launch the main control stack:
+In a second terminal, launch the main control stack:
 
 ```bash
 cd ros2_ws
@@ -194,61 +219,42 @@ source install/setup.bash
 ros2 launch snydrone_bringup snydrone_core.launch.py
 ```
 
-Publish a shot request:
+Then publish a shot request:
 
 ```bash
 ros2 topic pub /snydrone/shot/prompt std_msgs/msg/String "{data: 'orbit the target at 4 meter radius, 3 meters high, for 12 seconds'}" --once
 ```
 
-## Visuals
+## Visualizing The Project
 
-The simulation setup is a warehouse-style Isaac Sim environment with a Pegasus multirotor, PX4 backend integration, a moving subject, and an onboard camera. The repo includes a generated project graphic right now; adding raw simulator captures and short clips is the next easy upgrade for this section.
+The project is easiest to understand through three views:
 
-Suggested visuals to keep in this repo:
+- the simulator viewport, where the drone, target, and environment are visible together
+- the control graph, where prompts become setpoints and PX4 commands
+- the vision output, where the target is detected from onboard imagery
 
-- simulator viewport screenshot
-- annotated camera frame from the tracker
-- RViz or path visualization showing the generated orbit
-- short GIF of the drone executing a shot
+The README diagrams above show the control and software flow that connect those views into one pipeline.
 
-## What Has Been Built
+## Current State
 
-- modular ROS 2 package separation instead of one monolithic node
-- a real PX4 offboard adapter with coordinate-frame conversion
-- a live shot executor that consumes structured shot JSON
-- a simulation entry point that instantiates the drone, target, and camera pipeline
-- a vision tracker using YOLO-based target detection
-- a bringup package for the core runtime loop
+SnyDrone is currently a simulation-first prototype, but the main architecture is already implemented:
 
-This is no longer just a placeholder architecture. The codebase contains the main pieces of a working simulation-first aerial cinematography system.
+- prompt-to-shot planning
+- live trajectory generation
+- PX4 offboard command publishing
+- target-aware shot execution
+- camera-based perception
 
-## Current Limitations
+The project is designed so that shot quality, target tracking, and safety logic can continue to improve without rewriting the whole stack.
 
-- the primary tested path is simulation, not hardware
-- the shot vocabulary is still intentionally small
-- the LLM planner depends on `CLAUDE_API_KEY`
-- perception is not yet tightly closed into the control loop
-- several package metadata fields still need cleanup
-- setup is still research-project style rather than one-command polished
+## Why It Matters
 
-## Roadmap
+SnyDrone is intended as a foundation for autonomous filming systems that are easier for humans to direct. It is relevant to:
 
-- add more shot primitives such as reveal, follow, push-in, and pull-away
-- close the loop between vision output and shot execution
-- improve launch orchestration for full-stack startup
-- add reproducible setup instructions for PX4, Pegasus, and Isaac Sim
-- add safety constraints and better motion planning
-- mature the stack toward real-aircraft testing
+- creative robotics
+- human-robot interaction
+- simulation-first autonomy research
+- intelligent camera systems
+- embodied AI interfaces for physical systems
 
-## Why This Repo Looks Different Now
-
-The original GitHub repo was just a scaffold README and placeholder package layout. This version reflects the actual workspace:
-
-- real source packages copied from the working local project
-- giant local installs excluded
-- generated artifacts ignored
-- README rewritten to explain the real system rather than a template
-
-## Summary
-
-SnyDrone is a robotics and creative-autonomy project focused on one clear goal: making drones understand cinematic intent. If you are interested in autonomous filming, language-guided robotics, or simulation-first aerial systems, this repo is the foundation for that work.
+The project shows how language, perception, and control can be connected in a single robotics pipeline around a creative task rather than a purely navigational one.
