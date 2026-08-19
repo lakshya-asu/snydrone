@@ -139,6 +139,35 @@ test("yaw points at the target, and look_at none holds zero", () => {
   assert.ok(close(orbitSetpoint(TARGET, 3.3, spec({ look_at: "none" }))[3], 0));
 });
 
+// Speed is LINEAR metres per second along the orbit path, ratified
+// 2026-08-17 and matching orbit_geometry.py. The rad/s reading these
+// tests replace made a 20 m orbit fly 6.7 times faster over the
+// ground than a 3 m orbit on the same spec.
+
+test("speed is metres per second along the path", () => {
+  const v = 1.5, dt = 0.01, r = 4.0;
+  const a = orbitSetpoint(TARGET, 0, spec({ speed: v, radius: r }));
+  const b = orbitSetpoint(TARGET, dt, spec({ speed: v, radius: r }));
+  const step = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  assert.ok(close(step, v * dt, v * dt * 1e-3));
+});
+
+test("the orbit period scales with the radius", () => {
+  const v = 2.0;
+  for (const r of [2.0, 5.0]) {
+    const period = (2 * Math.PI * r) / v;
+    const start = orbitSetpoint(TARGET, 0, spec({ speed: v, radius: r }));
+    const later = orbitSetpoint(TARGET, period, spec({ speed: v, radius: r }));
+    assert.ok(close(later[0], start[0], 1e-6) && close(later[1], start[1], 1e-6));
+    const half = orbitSetpoint(TARGET, period / 2, spec({ speed: v, radius: r }));
+    assert.ok(close(half[0], TARGET[0] - r, 1e-6));
+  }
+});
+
+test("a nonpositive radius is rejected instead of dividing by it", () => {
+  assert.throws(() => orbitSetpoint(TARGET, 1.0, spec({ radius: 0 })), RangeError);
+});
+
 test("zero speed holds position", () => {
   const a = orbitSetpoint(TARGET, 0, spec({ speed: 0 }));
   const b = orbitSetpoint(TARGET, 30, spec({ speed: 0 }));

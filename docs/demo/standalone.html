@@ -302,7 +302,14 @@ function orbitSetpoint(target, t, spec) {
   const ty = target[1];
   const tz = target[2];
 
-  let theta = spec.speed * t;
+  if (spec.radius <= 0) {
+    throw new RangeError('orbit radius must be positive, got ' + spec.radius);
+  }
+
+  // speed is linear metres per second along the orbit path (ratified
+  // 2026-08-17), so the angular rate depends on the radius, exactly as
+  // in the flight code's orbit_geometry.py.
+  let theta = (spec.speed / spec.radius) * t;
   if (spec.clockwise) {
     theta = -theta;
   }
