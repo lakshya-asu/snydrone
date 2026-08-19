@@ -1,0 +1,48 @@
+# Tests the pure-logic core: spec validation, orbit geometry,
+# trajectory sampling, feasibility, coverage, resolution, frame
+# conversions, and the browser demo library.
+#
+# Deliberately does NOT build the ROS 2 packages. The nodes need
+# rclpy, px4_msgs, and a ROS distribution; everything they delegate
+# to is pure Python tested here. The ament lint tests (copyright,
+# flake8, pep257) only collect inside a ROS environment and are
+# excluded for the same reason.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - name: pure-logic pytest
+        run: >
+          python -m pytest -v
+          ros2_ws/src/snydrone_brain/test/test_planner_client.py
+          ros2_ws/src/snydrone_brain/test/test_shot_spec.py
+          ros2_ws/src/snydrone_px4/test/test_frames.py
+          ros2_ws/src/snydrone_shots/test/test_coverage.py
+          ros2_ws/src/snydrone_shots/test/test_feasibility.py
+          ros2_ws/src/snydrone_shots/test/test_orbit_geometry.py
+          ros2_ws/src/snydrone_shots/test/test_resolution.py
+          ros2_ws/src/snydrone_shots/test/test_trajectory.py
+
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: browser demo tests
+        run: node --test docs/demo/*.test.mjs
+      - name: standalone build is not stale
+        run: python docs/demo/build_standalone.py --check
