@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
 
-import json
-import math
 import rclpy
 from rclpy.node import Node
 
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 
-
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
-
-
-def quaternion_from_yaw(yaw: float):
-    """
-    Returns quaternion (x,y,z,w) for yaw-only rotation.
-    No numpy, no tf_transformations.
-    """
-    half = yaw * 0.5
-    return (0.0, 0.0, math.sin(half), math.cos(half))
+from snydrone_brain.shot_spec import ShotSpecError, parse_shot_spec
+from snydrone_shots.orbit_geometry import orbit_setpoint, yaw_to_quaternion
 
 
 class ShotExecutorNode(Node):
+    """Turns an accepted shot spec plus a target pose into pose setpoints.
+
+    All spec validation and clamping lives in shot_spec.parse_shot_spec,
+    and all orbit geometry lives in orbit_geometry.orbit_setpoint. Both
+    are pure modules with their own unit tests; this node only owns the
+    ROS plumbing around them. shot_spec.LIMITS is the single source of
+    truth for numeric ranges. This node holds no limit constants of its
+    own and never re-clamps.
+    """
+
     def __init__(self):
         super().__init__("snydrone_shot_executor")
 
@@ -59,37 +57,22 @@ class ShotExecutorNode(Node):
         self.get_logger().info("Publishing: /snydrone/setpoint/pose @ 20 Hz")
 
     def on_spec(self, msg: String):
+        # The planner already validates before publishing, but this topic
+        # is open to anyone with a terminal, so the executor runs the same
+        # validation again. Same code path, same LIMITS, so the two can
+        # never disagree about what is flyable.
         try:
-            spec = json.loads(msg.data)
-        except Exception as e:
-            self.get_logger().error(f"Failed to parse spec JSON: {e}")
+            spec = parse_shot_spec(msg.data)
+        except ShotSpecError as e:
+            self.get_logger().error(f"Spec rejected, not flying: {e}")
             return
 
-        shot = spec.get("shot", "orbit")
-        radius = float(spec.get("radius", 3.0))
-        height = float(spec.get("height", 3.5))
-        speed = float(spec.get("speed", 0.6))
-        duration_s = float(spec.get("duration_s", 10.0))
-        clockwise = bool(spec.get("clockwise", True))
-        look_at = spec.get("look_at", "target")
-        yaw_offset_deg = float(spec.get("yaw_offset_deg", 0.0))
+        clamped = spec.pop("clamped", [])
+        if clamped:
+            self.get_logger().warn(
+                f"clamped to shot_spec.LIMITS: {', '.join(clamped)}")
 
-        radius = clamp(radius, 0.5, 50.0)
-        height = clamp(height, 0.2, 50.0)
-        speed = clamp(speed, 0.05, 10.0)
-        duration_s = clamp(duration_s, 0.5, 600.0)
-
-        self.current_spec = {
-            "shot": shot,
-            "radius": radius,
-            "height": height,
-            "speed": speed,
-            "duration_s": duration_s,
-            "clockwise": clockwise,
-            "look_at": look_at,
-            "yaw_offset_deg": yaw_offset_deg,
-        }
-
+        self.current_spec = spec
         self.shot_start_time = self.get_clock().now()
         self.get_logger().info(f"New spec accepted: {self.current_spec}")
 
@@ -123,53 +106,7 @@ class ShotExecutorNode(Node):
         self.last_setpoint = sp
         self.pub_setpoint.publish(sp)
 
-    def hold_target_setpoint(self) -> PoseStamped:
-        target = self.target_pose.pose.position
-        height = self.current_spec["height"]
-
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.target_pose.header.frame_id or "world"
-
-        msg.pose.position.x = target.x
-        msg.pose.position.y = target.y
-        msg.pose.position.z = height
-
-        qx, qy, qz, qw = quaternion_from_yaw(0.0)
-        msg.pose.orientation.x = qx
-        msg.pose.orientation.y = qy
-        msg.pose.orientation.z = qz
-        msg.pose.orientation.w = qw
-
-        return msg
-
-    def compute_orbit_setpoint(self, t: float) -> PoseStamped:
-        target = self.target_pose.pose.position
-
-        r = self.current_spec["radius"]
-        h = self.current_spec["height"]
-        v = self.current_spec["speed"]
-        clockwise = self.current_spec["clockwise"]
-        look_at = self.current_spec["look_at"]
-
-        omega = v / max(r, 1e-3)
-        if clockwise:
-            omega = -omega
-
-        theta = omega * t
-
-        x = target.x + r * math.cos(theta)
-        y = target.y + r * math.sin(theta)
-        z = h
-
-        if look_at == "target":
-            yaw = math.atan2(target.y - y, target.x - x)
-            yaw += math.radians(self.current_spec["yaw_offset_deg"])
-        else:
-            yaw = theta + (math.pi / 2.0)
-
-        qx, qy, qz, qw = quaternion_from_yaw(yaw)
-
+    def _pose_msg(self, x, y, z, yaw) -> PoseStamped:
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.target_pose.header.frame_id or "world"
@@ -178,12 +115,25 @@ class ShotExecutorNode(Node):
         msg.pose.position.y = float(y)
         msg.pose.position.z = float(z)
 
+        qx, qy, qz, qw = yaw_to_quaternion(yaw)
         msg.pose.orientation.x = float(qx)
         msg.pose.orientation.y = float(qy)
         msg.pose.orientation.z = float(qz)
         msg.pose.orientation.w = float(qw)
 
         return msg
+
+    def hold_target_setpoint(self) -> PoseStamped:
+        target = self.target_pose.pose.position
+        # Height is relative to the target, matching orbit_geometry.
+        z = target.z + self.current_spec["height"]
+        return self._pose_msg(target.x, target.y, z, 0.0)
+
+    def compute_orbit_setpoint(self, t: float) -> PoseStamped:
+        target = self.target_pose.pose.position
+        x, y, z, yaw = orbit_setpoint(
+            (target.x, target.y, target.z), t, self.current_spec)
+        return self._pose_msg(x, y, z, yaw)
 
 
 def main():
