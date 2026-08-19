@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-import math
-import numpy as np
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
@@ -17,25 +14,9 @@ from px4_msgs.msg import (
     VehicleControlMode,
 )
 
-
-def quat_to_yaw(qx, qy, qz, qw) -> float:
-    """Quaternion -> yaw (rad). Standard ROS ENU yaw."""
-    # yaw (z-axis rotation)
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-
-def enu_to_ned_position(x_enu, y_enu, z_enu):
-    """
-    ENU -> NED
-    ENU: x=East, y=North, z=Up
-    NED: x=North, y=East, z=Down
-    """
-    x_ned = y_enu
-    y_ned = x_enu
-    z_ned = -z_enu
-    return x_ned, y_ned, z_ned
+# Every ENU/NED conversion in this node comes from the tested pure
+# module. No frame math is written here.
+from snydrone_px4.frames import enu_to_ned_position, enu_to_ned_yaw, quat_to_yaw
 
 
 class Px4OffboardAdapter(Node):
@@ -175,14 +156,7 @@ class Px4OffboardAdapter(Node):
             x_ned, y_ned, z_ned = enu_to_ned_position(x, y, z)
 
         yaw_enu = quat_to_yaw(q.x, q.y, q.z, q.w)
-
-        # Approx conversion for yaw ENU -> yaw NED:
-        # ENU yaw: 0 = East, +CCW (towards North)
-        # NED yaw: 0 = North, +CW (towards East)
-        # This mapping is: yaw_ned = (pi/2 - yaw_enu)
-        yaw_ned = (math.pi / 2.0) - yaw_enu
-        # wrap to [-pi, pi]
-        yaw_ned = math.atan2(math.sin(yaw_ned), math.cos(yaw_ned))
+        yaw_ned = enu_to_ned_yaw(yaw_enu)
 
         msg = TrajectorySetpoint()
         msg.timestamp = self.now_us()
