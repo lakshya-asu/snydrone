@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import json
+
 import rclpy
 from rclpy.node import Node
 
@@ -7,7 +9,14 @@ from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 
 from snydrone_brain.shot_spec import ShotSpecError, parse_shot_spec
+from snydrone_shots.feasibility import check_trajectory
 from snydrone_shots.orbit_geometry import orbit_setpoint, yaw_to_quaternion
+from snydrone_shots.trajectory import sample_trajectory
+
+# Rate at which the preflight gate samples the planned path. Dense
+# enough to catch every violation kind feasibility.py checks, cheap
+# enough that a 300 s spec gates in a few thousand samples.
+GATE_SAMPLE_HZ = 10.0
 
 
 class ShotExecutorNode(Node):
@@ -28,6 +37,7 @@ class ShotExecutorNode(Node):
         self.target_pose = None
         self.shot_start_time = None
         self.last_setpoint = None
+        self.spec_checked = False
 
         self.sub_spec = self.create_subscription(
             String,
@@ -46,6 +56,14 @@ class ShotExecutorNode(Node):
         self.pub_setpoint = self.create_publisher(
             PoseStamped,
             "/snydrone/setpoint/pose",
+            10,
+        )
+
+        # Typed refusal channel: a spec that validates but is not safe
+        # to fly is published here instead of ever becoming a setpoint.
+        self.pub_rejected = self.create_publisher(
+            String,
+            "/snydrone/shot/rejected",
             10,
         )
 
@@ -73,8 +91,9 @@ class ShotExecutorNode(Node):
                 f"clamped to shot_spec.LIMITS: {', '.join(clamped)}")
 
         self.current_spec = spec
-        self.shot_start_time = self.get_clock().now()
-        self.get_logger().info(f"New spec accepted: {self.current_spec}")
+        self.spec_checked = False
+        self.shot_start_time = None
+        self.get_logger().info(f"New spec accepted, pending preflight: {self.current_spec}")
 
     def on_target_pose(self, msg: PoseStamped):
         self.target_pose = msg
@@ -83,6 +102,12 @@ class ShotExecutorNode(Node):
         if self.current_spec is None:
             return
         if self.target_pose is None:
+            return
+
+        # Preflight gate: runs once per accepted spec, as soon as the
+        # target is known, before the first setpoint. An infeasible
+        # spec never flies; it is published as a typed refusal instead.
+        if not self.spec_checked and not self.preflight_check():
             return
         if self.shot_start_time is None:
             return
@@ -105,6 +130,58 @@ class ShotExecutorNode(Node):
 
         self.last_setpoint = sp
         self.pub_setpoint.publish(sp)
+
+    def preflight_check(self) -> bool:
+        """Gate the accepted spec through feasibility.check_trajectory.
+
+        Samples the exact path the executor is about to fly and checks
+        it against the flight envelope. Returns True and starts the
+        shot clock if the path is flyable. Otherwise publishes a typed
+        refusal on /snydrone/shot/rejected, logs it, drops the spec,
+        and returns False, so no setpoint is ever produced from it.
+        """
+        spec = self.current_spec
+        p = self.target_pose.pose.position
+        target = (p.x, p.y, p.z)
+
+        if spec["shot"] == "orbit":
+            traj = sample_trajectory(target, spec, GATE_SAMPLE_HZ)
+        else:
+            # Non-orbit shots hold above the target: a stationary
+            # two-sample path still gets the altitude, geofence, and
+            # keep-out checks.
+            z = target[2] + spec["height"]
+            traj = [
+                (0.0, target[0], target[1], z, 0.0),
+                (spec["duration_s"], target[0], target[1], z, 0.0),
+            ]
+
+        result = check_trajectory(traj)
+
+        if result["ok"]:
+            self.spec_checked = True
+            self.shot_start_time = self.get_clock().now()
+            self.get_logger().info(
+                f"preflight ok: {len(traj)} samples inside the envelope")
+            return True
+
+        refusal = {
+            "refused": True,
+            "spec": {k: spec[k] for k in spec},
+            "violations": result["violations"],
+        }
+        msg = String()
+        msg.data = json.dumps(refusal)
+        self.pub_rejected.publish(msg)
+
+        kinds = sorted({v["kind"] for v in result["violations"]})
+        self.get_logger().error(
+            f"REFUSED to fly: {len(result['violations'])} violation(s) "
+            f"({', '.join(kinds)}); spec dropped, refusal published on "
+            f"/snydrone/shot/rejected")
+
+        self.current_spec = None
+        return False
 
     def _pose_msg(self, x, y, z, yaw) -> PoseStamped:
         msg = PoseStamped()
