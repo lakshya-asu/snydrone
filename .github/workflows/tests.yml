@@ -34,6 +34,11 @@ jobs:
           ros2_ws/src/snydrone_shots/test/test_orbit_geometry.py
           ros2_ws/src/snydrone_shots/test/test_resolution.py
           ros2_ws/src/snydrone_shots/test/test_trajectory.py
+          ros2_ws/src/snydrone_shots/test/test_corpus.py
+      - name: shot-corpus evaluation is diagonal
+        run: >
+          python -m snydrone_shots.corpus.evaluate
+        working-directory: ros2_ws/src/snydrone_shots
 
   demo:
     runs-on: ubuntu-latest
