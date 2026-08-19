@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
 
-import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 
-
-def yaw_to_quaternion(yaw: float):
-    # roll = pitch = 0
-    # quaternion for yaw around Z
-    qz = math.sin(yaw * 0.5)
-    qw = math.cos(yaw * 0.5)
-    return (0.0, 0.0, qz, qw)
+from snydrone_shots.orbit_geometry import orbit_setpoint, yaw_to_quaternion
 
 
 class OrbitShotNode(Node):
@@ -26,10 +19,12 @@ class OrbitShotNode(Node):
         # Publish desired drone pose setpoint
         self.sp_pub = self.create_publisher(PoseStamped, "/snydrone/setpoint/pose", 10)
 
-        # Orbit parameters (cinematic knobs)
+        # Orbit parameters (cinematic knobs). Speed is linear metres per
+        # second along the orbit path (ratified 2026-08-17). 0.75 m/s on
+        # a 3 m radius matches the 0.25 rad/s this node used to fly.
         self.radius_m = 3.0
         self.height_m = 2.0
-        self.angular_speed_rps = 0.25  # radians/sec  (~ 25 sec per full circle)
+        self.speed_mps = 0.75
         self.publish_hz = 20.0
 
         self.target_pose = None
@@ -39,7 +34,7 @@ class OrbitShotNode(Node):
 
         self.get_logger().info("OrbitShotNode running")
         self.get_logger().info(f"Publishing /snydrone/setpoint/pose at {self.publish_hz} Hz")
-        self.get_logger().info(f"Orbit radius={self.radius_m}m height={self.height_m}m omega={self.angular_speed_rps}rad/s")
+        self.get_logger().info(f"Orbit radius={self.radius_m}m height={self.height_m}m speed={self.speed_mps}m/s")
 
     def on_target_pose(self, msg: PoseStamped):
         self.target_pose = msg
@@ -51,21 +46,24 @@ class OrbitShotNode(Node):
         # Time since start
         t = (self.get_clock().now() - self.t0).nanoseconds * 1e-9
 
-        # Target position
-        tx = self.target_pose.pose.position.x
-        ty = self.target_pose.pose.position.y
-        tz = self.target_pose.pose.position.z
+        target = (
+            self.target_pose.pose.position.x,
+            self.target_pose.pose.position.y,
+            self.target_pose.pose.position.z,
+        )
 
-        # Orbit angle
-        theta = self.angular_speed_rps * t
-
-        # Drone position on a circle around target
-        x = tx + self.radius_m * math.cos(theta)
-        y = ty + self.radius_m * math.sin(theta)
-        z = tz + self.height_m
-
-        # Yaw so the drone looks at the target
-        yaw = math.atan2(ty - y, tx - x)
+        # The geometry lives in the tested pure module, not here. This
+        # node only feeds it the clock and the target and ships the
+        # result. clockwise=False keeps the direction this node always
+        # flew (positive theta, counterclockwise from above).
+        spec = {
+            "radius": self.radius_m,
+            "height": self.height_m,
+            "speed": self.speed_mps,
+            "clockwise": False,
+            "look_at": "target",
+        }
+        x, y, z, yaw = orbit_setpoint(target, t, spec)
         qx, qy, qz, qw = yaw_to_quaternion(yaw)
 
         sp = PoseStamped()
