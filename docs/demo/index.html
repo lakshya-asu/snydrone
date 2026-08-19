@@ -1,0 +1,332 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>snydrone shot planner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1013; --panel: #16191e; --line: #262b33; --ink: #e6e9ee;
+    --dim: #8b93a1; --ok: #5ec07c; --warn: #e0b055; --bad: #e06b6b;
+    --accent: #6aa9f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  header {
+    padding: 18px 22px 14px; border-bottom: 1px solid var(--line);
+  }
+  h1 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  header p { margin: 0; color: var(--dim); max-width: 68ch; }
+  main {
+    display: grid; grid-template-columns: minmax(320px, 400px) 1fr;
+    gap: 0; align-items: stretch; min-height: 70vh;
+  }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { padding: 18px 22px; border-right: 1px solid var(--line); }
+  .stage { padding: 18px 22px; display: flex; flex-direction: column; }
+  h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  section + section { margin-top: 20px; }
+  textarea {
+    width: 100%; height: 150px; background: #0b0d10; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    resize: vertical;
+  }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  button {
+    font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer;
+    background: #21262e; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 5px;
+  }
+  button:hover { background: #2b313a; }
+  button.bad { border-color: #4a2c2c; color: #f0b0b0; }
+  #verdict {
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+    background: #0b0d10;
+  }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 1px 7px;
+    border-radius: 999px; margin-right: 6px;
+  }
+  .tag.ok { background: #143020; color: var(--ok); }
+  .tag.bad { background: #331919; color: var(--bad); }
+  .tag.warn { background: #322a14; color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 2px 0; }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  td.k { color: var(--dim); }
+  .clamped td:last-child { color: var(--warn); }
+  ul { margin: 6px 0 0; padding-left: 18px; color: var(--bad); font-size: 12px; }
+  canvas {
+    width: 100%; flex: 1; min-height: 340px; background: #0b0d10;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  footer {
+    padding: 12px 22px 20px; color: var(--dim); font-size: 12px;
+    border-top: 1px solid var(--line); max-width: 92ch;
+  }
+  code { background: #1b1f25; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+
+<header>
+  <h1>snydrone shot planner</h1>
+  <p>
+    A language model turns a spoken shot description into JSON. This is
+    everything that happens next: the JSON is validated and clamped, a
+    subject-relative trajectory is generated from it, and the result is
+    checked for flyability before anything reaches a flight controller.
+    The same code runs here and on the aircraft.
+  </p>
+</header>
+
+<main>
+  <div class="panel">
+    <section>
+      <h2>Model output</h2>
+      <div class="presets">
+        <button data-preset="good">a normal shot</button>
+        <button data-preset="prose">wrapped in prose</button>
+        <button data-preset="clamp" class="bad">out of range</button>
+        <button data-preset="unknown" class="bad">invented shot</button>
+        <button data-preset="broken" class="bad">malformed</button>
+      </div>
+      <textarea id="raw" spellcheck="false"></textarea>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <div id="verdict"></div>
+    </section>
+
+    <section>
+      <h2>Flyability</h2>
+      <div id="feas"></div>
+    </section>
+  </div>
+
+  <div class="stage">
+    <h2>Trajectory</h2>
+    <canvas id="view"></canvas>
+  </div>
+</main>
+
+<footer>
+  Written against <code>shotlib.mjs</code>, a direct port of the flight
+  code's <code>shot_spec</code>, <code>orbit_geometry</code> and
+  <code>trajectory</code> modules, so the path drawn here is the path the
+  aircraft would fly. No model runs in this page; paste or edit the JSON
+  above to stand in for one. The deliberately broken presets are the
+  interesting ones.
+</footer>
+
+<script type="module">
+import { parseShotSpec, sampleTrajectory, ShotSpecError } from "./shotlib.mjs";
+
+const PRESETS = {
+  good: `{"shot": "orbit", "radius": 6, "height": 3, "speed": 0.4,
+ "duration_s": 16, "clockwise": true, "look_at": "target"}`,
+  prose: `Sure! Here is the shot specification you asked for:
+\`\`\`json
+{"shot": "orbit", "radius": 4.5, "height": 2, "speed": 0.6,
+ "duration_s": 12, "clockwise": false, "look_at": "target"}
+\`\`\``,
+  clamp: `{"shot": "orbit", "radius": -5, "height": 400, "speed": 99,
+ "duration_s": 20, "clockwise": true, "look_at": "target"}`,
+  unknown: `{"shot": "barrel_roll", "radius": 5, "duration_s": 10}`,
+  broken: `I could not determine a shot for that request.`,
+};
+
+const TARGET = [0, 0, 0];
+const LIMITS = {
+  max_speed_mps: 8, max_accel_mps2: 6, max_yaw_rate_rps: 2,
+  min_altitude_m: 0.5, max_altitude_m: 120, geofence_radius_m: 100,
+  keep_out_radius_m: 2.0,
+};
+
+const raw = document.getElementById("raw");
+const verdict = document.getElementById("verdict");
+const feasEl = document.getElementById("feas");
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+
+let traj = [];
+
+// A local mirror of the Python feasibility rules, enough for the demo.
+// The repo's feasibility.py is the authority; this exists so the page
+// stays dependency-free.
+function feasibility(t) {
+  const out = [];
+  for (let i = 0; i + 1 < t.length; i++) {
+    const a = t[i], b = t[i + 1], dt = b[0] - a[0];
+    const d = Math.hypot(b[1] - a[1], b[2] - a[2], b[3] - a[3]);
+    if (d / dt > LIMITS.max_speed_mps + 1e-9)
+      out.push(`speed ${(d / dt).toFixed(1)} m/s exceeds ${LIMITS.max_speed_mps}`);
+    const dyaw = Math.abs(Math.atan2(Math.sin(b[4] - a[4]), Math.cos(b[4] - a[4]))) / dt;
+    if (dyaw > LIMITS.max_yaw_rate_rps + 1e-9)
+      out.push(`yaw rate ${dyaw.toFixed(2)} rad/s exceeds ${LIMITS.max_yaw_rate_rps}`);
+  }
+  for (const s of t) {
+    if (s[3] < LIMITS.min_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m below floor`); break; }
+    if (s[3] > LIMITS.max_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m above ceiling`); break; }
+  }
+  for (const s of t) {
+    if (Math.hypot(s[1], s[2]) < LIMITS.keep_out_radius_m) {
+      out.push(`enters the ${LIMITS.keep_out_radius_m} m keep-out around the subject`); break;
+    }
+  }
+  return [...new Set(out)];
+}
+
+function render() {
+  let spec = null, err = null;
+  try { spec = parseShotSpec(raw.value); }
+  catch (e) { err = e; }
+
+  if (err) {
+    traj = [];
+    verdict.innerHTML =
+      `<span class="tag bad">rejected</span>` +
+      `<div style="margin-top:6px;color:var(--dim)">${escapeHtml(err.message)}</div>` +
+      `<div style="margin-top:8px;font-size:12px;color:var(--dim)">` +
+      `Nothing is sent to the flight controller. This is the intended ` +
+      `outcome: refusing to fly beats flying something the operator ` +
+      `did not ask for.</div>`;
+    feasEl.innerHTML = `<span class="tag" style="color:var(--dim)">not evaluated</span>`;
+    draw();
+    return;
+  }
+
+  const clamped = spec.clamped || [];
+  const rows = ["shot", "radius", "height", "speed", "duration_s", "clockwise", "look_at"]
+    .map(k => `<tr class="${clamped.includes(k) ? "clamped" : ""}">` +
+              `<td class="k">${k}</td><td>${spec[k]}` +
+              `${clamped.includes(k) ? " clamped" : ""}</td></tr>`).join("");
+
+  verdict.innerHTML =
+    (clamped.length
+      ? `<span class="tag warn">accepted, ${clamped.length} value${clamped.length > 1 ? "s" : ""} clamped</span>`
+      : `<span class="tag ok">accepted</span>`) +
+    `<table style="margin-top:8px">${rows}</table>`;
+
+  traj = sampleTrajectory(TARGET, spec, 20);
+  const problems = feasibility(traj);
+  feasEl.innerHTML = problems.length
+    ? `<span class="tag bad">${problems.length} violation${problems.length > 1 ? "s" : ""}</span>` +
+      `<ul>${problems.map(p => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
+    : `<span class="tag ok">flyable</span>` +
+      `<div style="margin-top:6px;font-size:12px;color:var(--dim)">` +
+      `${traj.length} setpoints, checked against speed, yaw rate, altitude ` +
+      `band and the keep-out zone.</div>`;
+  draw();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// Isometric projection, drawn by hand so the page needs no 3D library.
+function project(x, y, z, s, cx, cy) {
+  const a = Math.PI / 6;
+  return [cx + (x - y) * Math.cos(a) * s, cy + ((x + y) * Math.sin(a) - z) * s];
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2 + 40;
+  let extent = 8;
+  for (const p of traj) extent = Math.max(extent, Math.abs(p[1]), Math.abs(p[2]), p[3]);
+  const s = Math.min(w, h) / (extent * 3.1);
+
+  // ground grid
+  ctx.strokeStyle = "#1b2028"; ctx.lineWidth = 1;
+  const g = Math.ceil(extent);
+  for (let i = -g; i <= g; i += 2) {
+    ctx.beginPath();
+    let p = project(i, -g, 0, s, cx, cy); ctx.moveTo(p[0], p[1]);
+    p = project(i, g, 0, s, cx, cy); ctx.lineTo(p[0], p[1]);
+    ctx.moveTo(...project(-g, i, 0, s, cx, cy));
+    ctx.lineTo(...project(g, i, 0, s, cx, cy));
+    ctx.stroke();
+  }
+
+  // keep-out cylinder around the subject
+  ctx.strokeStyle = "#4a2c2c"; ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  for (let i = 0; i <= 64; i++) {
+    const th = (i / 64) * Math.PI * 2;
+    const p = project(Math.cos(th) * LIMITS.keep_out_radius_m,
+                      Math.sin(th) * LIMITS.keep_out_radius_m, 0, s, cx, cy);
+    i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]);
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // subject
+  const t0 = project(0, 0, 0, s, cx, cy);
+  ctx.fillStyle = "#e0b055";
+  ctx.beginPath(); ctx.arc(t0[0], t0[1], 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#8b93a1"; ctx.font = "12px system-ui";
+  ctx.fillText("subject", t0[0] + 10, t0[1] + 4);
+
+  if (!traj.length) {
+    ctx.fillStyle = "#8b93a1";
+    ctx.fillText("no trajectory: the specification was rejected", 20, 28);
+    return;
+  }
+
+  // vertical drop lines, sparse
+  ctx.strokeStyle = "#1f2831";
+  for (let i = 0; i < traj.length; i += 12) {
+    const p = traj[i];
+    ctx.beginPath();
+    ctx.moveTo(...project(p[1], p[2], 0, s, cx, cy));
+    ctx.lineTo(...project(p[1], p[2], p[3], s, cx, cy));
+    ctx.stroke();
+  }
+
+  // the path
+  ctx.strokeStyle = "#6aa9f5"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  traj.forEach((p, i) => {
+    const q = project(p[1], p[2], p[3], s, cx, cy);
+    i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);
+  });
+  ctx.stroke();
+
+  // camera facing, every 10th setpoint
+  ctx.strokeStyle = "#5ec07c"; ctx.lineWidth = 1;
+  for (let i = 0; i < traj.length; i += 10) {
+    const p = traj[i];
+    const a = project(p[1], p[2], p[3], s, cx, cy);
+    const b = project(p[1] + Math.cos(p[4]) * 1.4,
+                      p[2] + Math.sin(p[4]) * 1.4, p[3], s, cx, cy);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+  }
+
+  // start marker
+  const st = project(traj[0][1], traj[0][2], traj[0][3], s, cx, cy);
+  ctx.fillStyle = "#e6e9ee";
+  ctx.beginPath(); ctx.arc(st[0], st[1], 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#8b93a1"; ctx.fillText("start", st[0] + 8, st[1] - 6);
+}
+
+document.querySelectorAll("[data-preset]").forEach(b =>
+  b.addEventListener("click", () => {
+    raw.value = PRESETS[b.dataset.preset];
+    render();
+  }));
+raw.addEventListener("input", render);
+window.addEventListener("resize", draw);
+
+raw.value = PRESETS.good;
+render();
+</script>
