@@ -91,6 +91,7 @@
         <button data-preset="good">a normal shot</button>
         <button data-preset="prose">wrapped in prose</button>
         <button data-preset="clamp" class="bad">out of range</button>
+        <button data-preset="unsafe" class="bad">valid but unsafe</button>
         <button data-preset="unknown" class="bad">invented shot</button>
         <button data-preset="broken" class="bad">malformed</button>
       </div>
@@ -136,6 +137,8 @@ const PRESETS = {
 \`\`\``,
   clamp: `{"shot": "orbit", "radius": -5, "height": 400, "speed": 99,
  "duration_s": 20, "clockwise": true, "look_at": "target"}`,
+  unsafe: `{"shot": "orbit", "radius": 1, "height": 2, "speed": 3,
+ "duration_s": 8, "clockwise": true, "look_at": "target"}`,
   unknown: `{"shot": "barrel_roll", "radius": 5, "duration_s": 10}`,
   broken: `I could not determine a shot for that request.`,
 };
@@ -154,6 +157,7 @@ const canvas = document.getElementById("view");
 const ctx = canvas.getContext("2d");
 
 let traj = [];
+let refused = false;
 
 // A local mirror of the Python feasibility rules, enough for the demo.
 // The repo's feasibility.py is the authority; this exists so the page
@@ -188,6 +192,7 @@ function render() {
 
   if (err) {
     traj = [];
+    refused = false;
     verdict.innerHTML =
       `<span class="tag bad">rejected</span>` +
       `<div style="margin-top:6px;color:var(--dim)">${escapeHtml(err.message)}</div>` +
@@ -214,9 +219,15 @@ function render() {
 
   traj = sampleTrajectory(TARGET, spec, 20);
   const problems = feasibility(traj);
-  feasEl.innerHTML = problems.length
-    ? `<span class="tag bad">${problems.length} violation${problems.length > 1 ? "s" : ""}</span>` +
-      `<ul>${problems.map(p => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
+  refused = problems.length > 0;
+  feasEl.innerHTML = refused
+    ? `<span class="tag bad">refused to fly</span>` +
+      `<ul>${problems.map(p => `<li>${escapeHtml(p)}</li>`).join("")}</ul>` +
+      `<div style="margin-top:8px;font-size:12px;color:var(--dim)">` +
+      `The spec is valid but the path it produces is not safe. On the ` +
+      `aircraft the executor drops it and publishes a typed refusal on ` +
+      `<code>/snydrone/shot/rejected</code>; no setpoint is ever sent. ` +
+      `The path shown is the one that was refused.</div>`
     : `<span class="tag ok">flyable</span>` +
       `<div style="margin-top:6px;font-size:12px;color:var(--dim)">` +
       `${traj.length} setpoints, checked against speed, yaw rate, altitude ` +
@@ -293,14 +304,22 @@ function draw() {
     ctx.stroke();
   }
 
-  // the path
-  ctx.strokeStyle = "#6aa9f5"; ctx.lineWidth = 2;
+  // the path: blue and solid if it will fly, red and dashed if the
+  // executor would refuse it
+  ctx.strokeStyle = refused ? "#e06b6b" : "#6aa9f5";
+  ctx.lineWidth = 2;
+  if (refused) ctx.setLineDash([6, 5]);
   ctx.beginPath();
   traj.forEach((p, i) => {
     const q = project(p[1], p[2], p[3], s, cx, cy);
     i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);
   });
   ctx.stroke();
+  ctx.setLineDash([]);
+  if (refused) {
+    ctx.fillStyle = "#e06b6b";
+    ctx.fillText("refused: this path is never sent to the flight controller", 20, 28);
+  }
 
   // camera facing, every 10th setpoint
   ctx.strokeStyle = "#5ec07c"; ctx.lineWidth = 1;
