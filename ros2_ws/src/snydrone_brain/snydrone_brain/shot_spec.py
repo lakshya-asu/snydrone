@@ -1,6 +1,7 @@
 """Shot specification parsing and validation for SNYdrone."""
 
 import json
+import math
 
 __all__ = ["DEFAULTS", "LIMITS", "ShotSpecError", "parse_shot_spec"]
 
@@ -54,23 +55,38 @@ def _extract_json_object(raw):
 
 
 def _coerce_numeric(value, field):
-    """Coerce a value to float for a numeric field, raising ShotSpecError on failure."""
+    """Coerce a value to float for a numeric field, raising ShotSpecError on failure.
+
+    Only FINITE numbers are accepted. Python's float() happily parses
+    "nan" and "inf", and Python's JSON decoder accepts the NaN and
+    Infinity literals, but a NaN field compares false against every
+    clamp and every feasibility limit, so a NaN radius used to sail
+    through both gates and fly a NaN setpoint. The browser mirror
+    (shotlib.mjs) already refused non-finite values; this matches it.
+    """
     if isinstance(value, bool):
         raise ShotSpecError(
             "Field '%s': expected a number, got a boolean" % field
         )
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        result = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value)
+            result = float(value)
         except ValueError:
             raise ShotSpecError(
                 "Field '%s': cannot parse %r as a number" % (field, value)
             )
-    raise ShotSpecError(
-        "Field '%s': expected a number, got %s" % (field, type(value).__name__)
-    )
+    else:
+        raise ShotSpecError(
+            "Field '%s': expected a number, got %s"
+            % (field, type(value).__name__)
+        )
+    if not math.isfinite(result):
+        raise ShotSpecError(
+            "Field '%s': %r is not a finite number" % (field, value)
+        )
+    return result
 
 
 def _coerce_bool(value, field):

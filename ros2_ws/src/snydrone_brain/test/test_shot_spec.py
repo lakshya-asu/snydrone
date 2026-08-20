@@ -114,6 +114,23 @@ def test_non_numeric_value_in_a_numeric_field_is_an_error():
         parse_shot_spec('{"radius": "wide"}')
 
 
+@pytest.mark.parametrize("raw", [
+    '{"radius": "nan"}',
+    '{"radius": "inf"}',
+    '{"radius": "-inf"}',
+    '{"radius": NaN}',        # Python's JSON decoder accepts the literal
+    '{"height": Infinity}',
+    '{"speed": -Infinity}',
+])
+def test_non_finite_numbers_are_refused_not_flown(raw):
+    # float("nan") parses, NaN compares false against every clamp bound
+    # and every feasibility limit, and before this guard a NaN radius was
+    # ACCEPTED end to end and produced NaN setpoints. Non-finite input is
+    # not a number the aircraft can fly; refuse it at parse.
+    with pytest.raises(ShotSpecError):
+        parse_shot_spec(raw)
+
+
 def test_booleans_accept_the_usual_string_spellings():
     assert parse_shot_spec('{"clockwise": "false"}')["clockwise"] is False
     assert parse_shot_spec('{"clockwise": "True"}')["clockwise"] is True
