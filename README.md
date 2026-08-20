@@ -241,11 +241,11 @@ The README diagrams above show the control and software flow that connect those 
 
 The safety layer is measured, not just described. A labelled corpus of shot requests runs through the real pipeline (spec parsing, trajectory sampling, feasibility checking) as pure logic, with no ROS or simulator involved, and the same run gates CI:
 
-- corpus size: 102 cases across five ground-truth labels (nominal, out of limits, infeasible dynamic, infeasible geometric, ambiguous)
-- overall agreement between the system's decisions and the labels: 102 / 102, a fully diagonal confusion matrix
-- swept-path result: 12 keep-out cases whose waypoints are each individually clear of the zone; the swept-path segment check catches 12 of 12, while a per-waypoint checker catches 0 of 12, a delta of 100 percentage points
+- corpus size: 152 cases across five ground-truth labels (nominal, out of limits, infeasible dynamic, infeasible geometric, ambiguous), including at-limit boundary cases, mixed dynamic-plus-geometric cases, omissions, and non-finite inputs
+- overall agreement between the system's decisions and the labels: 152 / 152, a fully diagonal confusion matrix
+- swept-path result: 17 keep-out cases whose waypoints are each individually clear of the zone; the swept-path segment check catches 17 of 17, while a per-waypoint checker catches 0 of 17, a delta of 100 percentage points
 
-The feasibility gate behind those numbers checks speed, tangential acceleration, centripetal acceleration, yaw rate, an altitude band, a geofence, and a keep-out cylinder tested along each segment rather than only at waypoints. The spec parser has a strict mode that refuses requests with omitted fields instead of silently filling defaults, which is how the corpus scores underspecified requests. Reproduce the numbers with `python -m snydrone_shots.corpus.evaluate` from `ros2_ws/src/snydrone_shots`.
+The feasibility gate behind those numbers checks speed, tangential acceleration, centripetal acceleration (with a chord correction so coarse sampling cannot under-read a tight turn), the vector sum of the two acceleration components, yaw rate, an altitude band, a geofence, and a keep-out cylinder tested along each segment rather than only at waypoints. The spec parser has a strict mode that refuses requests with omitted fields instead of silently filling defaults, which is how the corpus scores underspecified requests, and it refuses non-finite numbers outright. A refused shot is published as a typed refusal that names each failed limit and the margin by which it failed. Reproduce the numbers with `python -m snydrone_shots.corpus.evaluate` from `ros2_ws/src/snydrone_shots`.
 
 ## Current State
 
