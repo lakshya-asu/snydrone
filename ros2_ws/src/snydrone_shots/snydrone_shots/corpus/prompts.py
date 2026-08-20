@@ -92,14 +92,16 @@ def orbit(radius=3.0, height=3.5, speed=0.6, duration_s=10.0,
 
 
 def case(cid, label, spec, target=(0.0, 0.0, 1.0), env=None,
-         swept=False, rationale=""):
+         swept=False, mixed=False, rationale=""):
     """Assemble one labelled corpus entry.
 
     target is the subject pose (the orbit centre). env is a set of
     feasibility limit overrides describing the scene, most often a
     keep-out cylinder. swept marks a keep-out case whose waypoints are all
-    individually clear. rationale is the one-line justification tying the
-    case to a named bound.
+    individually clear. mixed marks a case that deliberately trips both
+    the dynamic and the geometric family at once (labelled geometric,
+    because that is the harness tie-break). rationale is the one-line
+    justification tying the case to a named bound.
     """
     return {
         "id": cid,
@@ -108,6 +110,7 @@ def case(cid, label, spec, target=(0.0, 0.0, 1.0), env=None,
         "target": tuple(float(v) for v in target),
         "env": dict(env or {}),
         "swept": swept,
+        "mixed": mixed,
         "rationale": rationale,
     }
 
@@ -194,6 +197,46 @@ _NOMINAL = [
                                   duration_s=6.0, look_at="none"),
          rationale="centripetal boundary: speed^2/radius exactly 6.0 m/s^2, "
                    "at the envelope and at-limit passes"),
+    # Boundary lane (2026-08-20 growth): cases that sit exactly at, or a
+    # hair inside, an envelope bound, so an off-by-strictness regression
+    # in any gate flips one of these first.
+    case("nom-25", NOMINAL, orbit(radius=1.5, height=4.0, speed=3.0,
+                                  duration_s=6.0),
+         rationale="double at-limit: yaw rate exactly 2.0 rad/s AND "
+                   "centripetal exactly 6.0 m/s^2, both pass at-limit"),
+    case("nom-26", NOMINAL, orbit(radius=1.55, height=4.0, speed=3.0,
+                                  duration_s=6.0, look_at="none"),
+         rationale="centripetal 5.81 m/s^2, just inside the 6.0 envelope"),
+    case("nom-27", NOMINAL, orbit(radius=1.6, height=4.0, speed=3.0,
+                                  duration_s=6.0),
+         rationale="yaw rate 1.875 rad/s and centripetal 5.63 m/s^2, both "
+                   "just inside their envelopes"),
+    case("nom-28", NOMINAL, orbit(radius=6.0, height=4.0, speed=1.0),
+         target=(94.0, 0.0, 1.0),
+         rationale="geofence boundary: the orbit reaches exactly 100 m "
+                   "from origin, at the fence and at-limit passes"),
+    case("nom-29", NOMINAL, orbit(radius=5.0, height=30.0, speed=1.0),
+         target=(0.0, 0.0, 90.0),
+         rationale="altitude boundary: exactly 120 m, at the ceiling"),
+    case("nom-30", NOMINAL, orbit(radius=5.0, height=0.5, speed=1.0),
+         target=(0.0, 0.0, 0.0),
+         rationale="altitude boundary: exactly 0.5 m, at the floor"),
+    case("nom-31", NOMINAL, orbit(radius=5.0, height=4.0, speed=1.8,
+                                  duration_s=8.0),
+         target=(0.0, 0.0, 1.0), env=_keepout((0.0, 0.0), 4.97),
+         rationale="swept-path boundary, clear side: at 2 Hz the chord "
+                   "sags to 4.9798 m from the centre, 1 cm outside the "
+                   "4.97 m keep-out"),
+    case("nom-32", NOMINAL, orbit(radius=5.0, height=4.0, speed=1.0),
+         target=(0.0, 0.0, 1.0), env=_offset_keepout((30.0, 0.0), 5.0),
+         rationale="an offset keep-out 25 m clear of the whole orbit"),
+    case("nom-33", NOMINAL, orbit(radius=1.6, height=4.0, speed=3.0,
+                                  duration_s=6.0, clockwise=False),
+         rationale="counter-clockwise near-boundary orbit, yaw 1.875 rad/s"),
+    case("nom-34", NOMINAL, orbit(radius=2.0, height=4.0, speed=3.0,
+                                  duration_s=6.0),
+         rationale="max legal speed on a 2 m radius: yaw 1.5 rad/s and "
+                   "centripetal 4.5 m/s^2, both inside"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -239,6 +282,16 @@ _OUT_OF_LIMITS = [
          rationale="over-speed and under-radius, both clamp into range"),
     case("ool-18", OUT_OF_LIMITS, orbit(duration_s=3600.0, radius=12.0),
          rationale="an hour-long duration, clamps to 300 s"),
+    # Boundary lane (2026-08-20 growth): a hair outside the clamp range,
+    # so the clamp comparison's strictness is pinned from the outside too.
+    case("ool-19", OUT_OF_LIMITS, orbit(radius=20.0000001),
+         rationale="radius 1e-7 over the 20 m ceiling still clamps"),
+    case("ool-20", OUT_OF_LIMITS, orbit(duration_s=300.001),
+         rationale="duration 1 ms over the 300 s ceiling still clamps"),
+    case("ool-21", OUT_OF_LIMITS, orbit(speed=3.01, height=0.49),
+         rationale="speed and height each a hair outside, both clamp"),
+    case("ool-22", OUT_OF_LIMITS, orbit(radius=1e6),
+         rationale="an absurd kilometre-scale radius clamps to 20 m"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -309,6 +362,36 @@ _DYNAMIC = [
                                              height=4.0, duration_s=6.0,
                                              look_at="none"),
          rationale="fixed heading, centripetal 6.53 m/s^2 over the envelope"),
+    # Boundary lane (2026-08-20 growth). dyn-18 and dyn-19 are only
+    # catchable because of the chord correction: their RAW 2 Hz readings
+    # (5.93 and 5.85) sit under the envelope, their true loads (6.21 and
+    # 6.25) sit over it.
+    case("dyn-18", INFEASIBLE_DYNAMIC, orbit(radius=1.45, speed=3.0,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="centripetal 6.21 m/s^2 true; raw 2 Hz chords read 5.93 "
+                   "and would pass, the chord correction refuses"),
+    case("dyn-19", INFEASIBLE_DYNAMIC, orbit(radius=1.0, speed=2.5,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="centripetal 6.25 m/s^2 true; raw 2 Hz chords read 5.85 "
+                   "and would pass, the chord correction refuses"),
+    case("dyn-20", INFEASIBLE_DYNAMIC, orbit(radius=1.48, speed=3.0,
+                                             height=4.0, duration_s=6.0),
+         rationale="just past the double boundary: yaw 2.03 rad/s and "
+                   "centripetal 6.08 m/s^2, both barely over"),
+    case("dyn-21", INFEASIBLE_DYNAMIC, orbit(radius=1.3, speed=3.0,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="fixed heading, centripetal 6.92 m/s^2 over the envelope"),
+    case("dyn-22", INFEASIBLE_DYNAMIC, orbit(radius=1.0, speed=2.2,
+                                             height=4.0, duration_s=6.0),
+         rationale="yaw rate 2.2 rad/s over while centripetal 4.84 stays "
+                   "under: the yaw gate alone must catch it"),
+    case("dyn-23", INFEASIBLE_DYNAMIC, orbit(radius=1.1, speed=2.7,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="fixed heading, centripetal 6.63 m/s^2 over the envelope"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -397,6 +480,76 @@ _SWEPT = [
     _swept("swp-10", 10.0, 1.9, 6.0, (0.0, 0.0, 1.0)),
     _swept("swp-11", 2.0, 1.2, 2.0, (0.0, 0.0, 1.0)),
     _swept("swp-12", 3.5, 1.5, 3.0, (15.0, -15.0, 2.0), clockwise=False),
+    _swept("swp-13", 9.0, 1.7, 5.0, (0.0, 0.0, 1.0)),
+    _swept("swp-14", 4.5, 1.3, 3.5, (-10.0, 20.0, 2.0)),
+]
+
+# ---------------------------------------------------------------------------
+# Swept-path BOUNDARY (2026-08-20 growth): the keep-out radius is set just
+# above the chord's closest approach R*cos(dphi/2) but below the waypoint
+# distance R, so the intrusion is millimetres. Every waypoint is still
+# individually clear; only the segment check can see the crossing. Paired
+# with nom-31, the same orbit against a keep-out 1 cm smaller, which is
+# clear. These pin the swept-path check at its decision boundary.
+# ---------------------------------------------------------------------------
+def _swept_boundary(cid, radius, speed, height, keep_out_radius,
+                    target=(0.0, 0.0, 1.0)):
+    tgt = tuple(float(v) for v in target)
+    return case(
+        cid, INFEASIBLE_GEOMETRIC,
+        orbit(radius=radius, height=height, speed=speed, duration_s=8.0),
+        target=tgt, env=_keepout(tgt, keep_out_radius), swept=True,
+        rationale=("boundary swept case: waypoints at %.2f m, chord sags "
+                   "millimetres inside the %.3f m keep-out"
+                   % (radius, keep_out_radius)),
+    )
+
+
+_SWEPT_BOUNDARY = [
+    # R=5, v=1.8 at 2 Hz: chord closest approach 4.9798 m; 4.99 catches.
+    _swept_boundary("swb-01", 5.0, 1.8, 4.0, 4.99),
+    # R=8, v=1.6: dphi=0.1, closest approach 7.9900 m; 7.995 catches.
+    _swept_boundary("swb-02", 8.0, 1.6, 5.0, 7.995),
+    # R=3, v=1.4: dphi=0.2333, closest approach 2.9796 m; 2.99 catches.
+    _swept_boundary("swb-03", 3.0, 1.4, 3.0, 2.99),
+]
+
+# ---------------------------------------------------------------------------
+# MIXED (2026-08-20 growth): cases that trip a dynamic AND a geometric
+# bound at once. Labelled INFEASIBLE_GEOMETRIC because the geometric
+# bounds are the hard safety ones and that is the harness tie-break; the
+# harness also surfaces every such case in mixed_family_cases so the
+# tie-break is exercised, not hidden. Until these, that code path had no
+# coverage.
+# ---------------------------------------------------------------------------
+_MIXED = [
+    case("mix-01", INFEASIBLE_GEOMETRIC,
+         orbit(radius=1.2, height=4.0, speed=2.8, duration_s=6.0),
+         target=(99.5, 0.0, 1.0), mixed=True,
+         rationale="tight fast orbit past the fence: yaw 2.33 rad/s over "
+                   "AND the orbit reaches 100.7 m from origin"),
+    case("mix-02", INFEASIBLE_GEOMETRIC,
+         orbit(radius=1.0, height=4.0, speed=2.5, duration_s=6.0),
+         target=(0.0, 0.0, 118.0), mixed=True,
+         rationale="tight orbit over the ceiling: yaw 2.5 rad/s over AND "
+                   "altitude 122 m over the 120 m ceiling"),
+    case("mix-03", INFEASIBLE_GEOMETRIC,
+         orbit(radius=1.3, height=4.0, speed=2.9, duration_s=6.0),
+         target=(0.0, 0.0, 1.0), env=_offset_keepout((1.3, 0.0), 0.8),
+         mixed=True,
+         rationale="tight orbit through a keep-out: yaw 2.23 rad/s over "
+                   "AND waypoints inside the 0.8 m cylinder on the ring"),
+    case("mix-04", INFEASIBLE_GEOMETRIC,
+         orbit(radius=1.4, height=4.0, speed=3.0, duration_s=6.0,
+               look_at="none"),
+         target=(99.0, 0.0, 1.0), mixed=True,
+         rationale="fixed heading: centripetal 6.43 m/s^2 over AND the "
+                   "orbit reaches 100.4 m from origin"),
+    case("mix-05", INFEASIBLE_GEOMETRIC,
+         orbit(radius=1.0, height=0.5, speed=2.5, duration_s=6.0),
+         target=(0.0, 0.0, -0.3), mixed=True,
+         rationale="tight orbit below the floor: yaw 2.5 rad/s over AND "
+                   "altitude 0.2 m under the 0.5 m floor"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -466,6 +619,63 @@ _AMBIGUOUS = [
          rationale="a duration with no geometry: radius and height omitted"),
     case("amb-21", AMBIGUOUS, {"radius": 6.0, "speed": 1.0},
          rationale="no shot type at all, nothing says what to fly"),
+    # Omission lane growth (2026-08-20): every single-field omission is
+    # now covered, plus the empty object.
+    case("amb-22", AMBIGUOUS, {"shot": "orbit", "look_at": "target"},
+         rationale="shot and framing given, all five numbers omitted"),
+    case("amb-23", AMBIGUOUS,
+         {"shot": "orbit", "radius": 5.0, "height": 4.0, "speed": 1.0,
+          "duration_s": 10.0, "look_at": "target"},
+         rationale="a single omission: clockwise is missing"),
+    case("amb-24", AMBIGUOUS,
+         {"shot": "orbit", "radius": 5.0, "height": 4.0, "speed": 1.0,
+          "clockwise": True, "look_at": "target"},
+         rationale="a single omission: duration_s is missing"),
+    case("amb-25", AMBIGUOUS,
+         {"shot": "orbit", "radius": 5.0, "speed": 1.0,
+          "duration_s": 10.0, "clockwise": True, "look_at": "target"},
+         rationale="a single omission: height is missing"),
+    case("amb-26", AMBIGUOUS,
+         {"shot": "orbit", "height": 4.0, "speed": 1.0,
+          "duration_s": 10.0, "clockwise": True, "look_at": "target"},
+         rationale="a single omission: radius is missing"),
+    case("amb-27", AMBIGUOUS, {},
+         rationale="the empty object: everything omitted at once"),
+    # Non-finite and wrong-type lane (2026-08-20): values float() or the
+    # JSON decoder happily produce but no aircraft can fly. The "nan"
+    # cases found a real hole: before the parser's finite check, a NaN
+    # radius passed every clamp and every feasibility limit (NaN compares
+    # false) and was ACCEPTED end to end.
+    case("amb-28", AMBIGUOUS, _bad("radius", "nan"),
+         rationale="the string 'nan' parses to NaN, which sails through "
+                   "every comparison; must be refused, not flown"),
+    case("amb-29", AMBIGUOUS, _bad("speed", "inf"),
+         rationale="the string 'inf' parses to infinity, not a speed"),
+    case("amb-30", AMBIGUOUS, _bad("radius", float("nan")),
+         rationale="a literal NaN via JSON's NaN extension, refused"),
+    case("amb-31", AMBIGUOUS, _bad("height", float("inf")),
+         rationale="a literal Infinity height, refused"),
+    case("amb-32", AMBIGUOUS, _bad("speed", float("-inf")),
+         rationale="a literal -Infinity speed, refused"),
+    case("amb-33", AMBIGUOUS, _bad("radius", "4 m"),
+         rationale="a number with a unit suffix does not parse; the "
+                   "planner emits bare numbers"),
+    case("amb-34", AMBIGUOUS, _bad("speed", "1,5"),
+         rationale="a European decimal comma does not parse to a number"),
+    case("amb-35", AMBIGUOUS, _bad("radius", True),
+         rationale="a boolean is not a radius even though bool is an int"),
+    case("amb-36", AMBIGUOUS, _bad("duration_s", [10]),
+         rationale="a list is not a duration"),
+    case("amb-37", AMBIGUOUS, _bad("look_at", 3),
+         rationale="look_at must be a string, not a number"),
+    case("amb-38", AMBIGUOUS, _bad("shot", 42),
+         rationale="shot must be a string, not a number"),
+    case("amb-39", AMBIGUOUS, _bad("clockwise", 2),
+         rationale="only 0 and 1 coerce to a boolean; 2 is undecidable"),
+    case("amb-40", AMBIGUOUS, _bad("speed", ""),
+         rationale="an empty string is not a number"),
+    case("amb-41", AMBIGUOUS, _bad("radius", None),
+         rationale="JSON null carries no magnitude to fly"),
 ]
 
 CORPUS = (
@@ -474,6 +684,8 @@ CORPUS = (
     + _DYNAMIC
     + _GEOMETRIC_PLAIN
     + _SWEPT
+    + _SWEPT_BOUNDARY
+    + _MIXED
     + _AMBIGUOUS
 )
 
@@ -486,3 +698,8 @@ def by_label(label):
 def swept_cases():
     """Return the swept-path keep-out cases."""
     return [c for c in CORPUS if c["swept"]]
+
+
+def mixed_cases():
+    """Return the cases that trip both violation families at once."""
+    return [c for c in CORPUS if c["mixed"]]

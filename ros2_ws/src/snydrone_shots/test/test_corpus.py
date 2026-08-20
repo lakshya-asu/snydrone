@@ -85,8 +85,11 @@ def _ids(label):
 # ------------------------------------------------------------- structure
 
 def test_corpus_is_a_sensible_size():
-    # The brief asks for roughly 80 to 120 cases.
-    assert 80 <= len(CORPUS) <= 120
+    # Checker history: the original brief asked for roughly 80 to 120
+    # cases and this asserted exactly that. The 2026-08-20 growth mandate
+    # raised the target to 150 plus (boundary, mixed-family, omission and
+    # non-finite lanes), so the old ceiling was wrong, not the corpus.
+    assert 150 <= len(CORPUS) <= 250
 
 
 def test_every_case_has_the_required_shape():
@@ -169,7 +172,12 @@ def test_every_dynamic_case_passes_limits_then_fails_on_dynamics_only():
 # --------------------------------------------------- INFEASIBLE_GEOMETRIC
 
 def test_every_geometric_case_passes_limits_then_fails_on_geometry_only():
+    # The mixed-family cases are excluded here on purpose: they carry the
+    # geometric label because of the harness tie-break, but tripping a
+    # dynamic bound too is their entire point. They get their own test.
     for c in prompts.by_label(INFEASIBLE_GEOMETRIC):
+        if c["mixed"]:
+            continue
         spec = _parse(c)
         assert spec["clamped"] == [], (
             "INFEASIBLE_GEOMETRIC %s clamped at parse" % c["id"])
@@ -181,6 +189,33 @@ def test_every_geometric_case_passes_limits_then_fails_on_geometry_only():
         assert kinds <= GEOMETRIC_KINDS, (
             "INFEASIBLE_GEOMETRIC %s also trips a dynamic bound: %s"
             % (c["id"], sorted(kinds)))
+
+
+def test_every_mixed_case_trips_both_families_and_lands_geometric():
+    # The tie-break under test: a case violating a dynamic AND a geometric
+    # bound is predicted geometric (the hard safety family) and surfaced
+    # in mixed_family_cases so it never hides. Before these cases that
+    # code path had no coverage at all.
+    from snydrone_shots.corpus.evaluate import classify
+    mixed = prompts.mixed_cases()
+    assert mixed, "the corpus has no mixed-family cases"
+    for c in mixed:
+        assert c["label"] == INFEASIBLE_GEOMETRIC
+        spec = _parse(c)
+        assert spec["clamped"] == [], c["id"]
+        _traj, feas = _sample_and_check(c, spec)
+        kinds = {v["kind"] for v in feas["violations"]}
+        assert kinds & DYNAMIC_KINDS, (
+            "mixed case %s trips no dynamic bound: %s"
+            % (c["id"], sorted(kinds)))
+        assert kinds & GEOMETRIC_KINDS, (
+            "mixed case %s trips no geometric bound: %s"
+            % (c["id"], sorted(kinds)))
+        assert classify(c)["predicted"] == INFEASIBLE_GEOMETRIC
+    report = evaluate()
+    surfaced = {m["id"] for m in report["mixed_family_cases"]}
+    assert surfaced == {c["id"] for c in mixed}, (
+        "the harness does not surface exactly the mixed cases")
 
 
 # ------------------------------------------------------------- AMBIGUOUS
