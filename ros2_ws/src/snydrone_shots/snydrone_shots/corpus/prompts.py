@@ -26,15 +26,24 @@ No physics numbers are invented here. Every threshold is read from
 shot_spec.LIMITS (the clamp layer) and feasibility.DEFAULT_LIMITS (the
 flight envelope), and each case is derived from one of those bounds.
 
-The dynamic cases are all tight, fast orbits whose subject-tracking yaw
-rate exceeds the vehicle limit. That is deliberate and honest: for an
-in-limits orbit spec, the yaw rate is the only dynamic-envelope quantity
-the checker can actually reach. The tangential speed of an orbit equals
+The dynamic cases are tight, fast orbits and trip one of two envelope
+quantities. With subject tracking (look_at="target") the yaw rate
+speed / radius exceeds the vehicle limit. With a fixed heading
+(look_at="none") there is no yaw at all, and the violated quantity is
+the centripetal acceleration speed^2 / radius, the lateral load a
+constant-speed turn demands, measured by the checker from the direction
+change of the sampled velocity. The tangential speed of an orbit equals
 the spec speed, which the clamp caps at 3.0 m/s, well under the 8.0 m/s
 envelope, and a constant-speed orbit has no tangential acceleration, so
-neither can ever be the violated quantity. (The centripetal acceleration
-of a tight orbit is real but is not measured by the current checker; see
-the notes in the evaluate report.)
+neither of those can ever be the violated quantity.
+
+One sampling honesty note: the gate measures centripetal load from the
+2.0 Hz waypoint plan, and finite differencing under-reads the true
+continuous value on very tight turns (radius 1 m at 2.5 m/s is truly
+6.25 m/s^2 but reads 5.55 at this rate and passes). Corpus labels state
+what the gate decides at CORPUS_GATE_HZ, so boundary cases are chosen
+where the sampled reading and the true value agree on which side of the
+envelope they fall.
 
 The swept-path cases command the orbit radius to equal the required
 standoff to the subject. Every waypoint then sits exactly on the standoff
@@ -176,6 +185,14 @@ _NOMINAL = [
     case("nom-22", NOMINAL, orbit(radius=11.0, height=7.0, speed=2.0,
                                   clockwise=False, look_at="none"),
          rationale="fast wide fixed-heading orbit, all bounds satisfied"),
+    case("nom-23", NOMINAL, orbit(radius=2.0, height=4.0, speed=3.0,
+                                  duration_s=6.0, look_at="none"),
+         rationale="fixed-heading control for the centripetal check: "
+                   "speed^2/radius is 4.5 m/s^2, under the 6.0 envelope"),
+    case("nom-24", NOMINAL, orbit(radius=1.5, height=4.0, speed=3.0,
+                                  duration_s=6.0, look_at="none"),
+         rationale="centripetal boundary: speed^2/radius exactly 6.0 m/s^2, "
+                   "at the envelope and at-limit passes"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -224,10 +241,14 @@ _OUT_OF_LIMITS = [
 ]
 
 # ---------------------------------------------------------------------------
-# INFEASIBLE_DYNAMIC: inside shot_spec.LIMITS (no clamp), then the
-# subject-tracking yaw rate speed / radius exceeds the 2.0 rad/s envelope.
-# radius stays >= 1.0 and speed <= 3.0 so nothing clamps; radius is small
-# and the subject sits at the origin so no geometric bound is touched.
+# INFEASIBLE_DYNAMIC: inside shot_spec.LIMITS (no clamp), then a dynamic
+# envelope quantity is exceeded. For look_at="target" cases it is the
+# subject-tracking yaw rate speed / radius over the 2.0 rad/s envelope.
+# For look_at="none" cases there is no yaw motion at all and the violated
+# quantity is the centripetal acceleration speed^2 / radius over the
+# 6.0 m/s^2 envelope. radius stays >= 1.0 and speed <= 3.0 so nothing
+# clamps; radius is small and the subject sits at the origin so no
+# geometric bound is touched.
 # ---------------------------------------------------------------------------
 _DYNAMIC = [
     case("dyn-01", INFEASIBLE_DYNAMIC, orbit(radius=1.0, speed=2.5,
@@ -273,6 +294,20 @@ _DYNAMIC = [
     case("dyn-14", INFEASIBLE_DYNAMIC, orbit(radius=1.15, speed=2.4,
                                              height=4.0, duration_s=6.0),
          rationale="yaw rate 2.09 rad/s over the envelope"),
+    case("dyn-15", INFEASIBLE_DYNAMIC, orbit(radius=1.0, speed=3.0,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="the verifier-gap case: fixed heading, no yaw motion, "
+                   "centripetal 9.0 m/s^2 over the 6.0 envelope"),
+    case("dyn-16", INFEASIBLE_DYNAMIC, orbit(radius=1.4, speed=3.0,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="centripetal boundary: 6.43 m/s^2 true, 6.13 sampled, "
+                   "over the envelope on both readings"),
+    case("dyn-17", INFEASIBLE_DYNAMIC, orbit(radius=1.2, speed=2.8,
+                                             height=4.0, duration_s=6.0,
+                                             look_at="none"),
+         rationale="fixed heading, centripetal 6.53 m/s^2 over the envelope"),
 ]
 
 # ---------------------------------------------------------------------------

@@ -30,16 +30,16 @@ def check_trajectory(traj, limits=None):
     violations = []
     n = len(traj)
 
-    # Precompute segment speeds
+    # Precompute segment velocity vectors and their speeds
+    seg_vels = []
     seg_speeds = []
     for i in range(n - 1):
         dt = traj[i + 1][0] - traj[i][0]
-        dist = math.sqrt(
-            (traj[i + 1][1] - traj[i][1]) ** 2
-            + (traj[i + 1][2] - traj[i][2]) ** 2
-            + (traj[i + 1][3] - traj[i][3]) ** 2
-        )
-        seg_speeds.append(dist / dt)
+        vx = (traj[i + 1][1] - traj[i][1]) / dt
+        vy = (traj[i + 1][2] - traj[i][2]) / dt
+        vz = (traj[i + 1][3] - traj[i][3]) / dt
+        seg_vels.append((vx, vy, vz))
+        seg_speeds.append(math.sqrt(vx * vx + vy * vy + vz * vz))
 
     # Speed check (per segment)
     for i in range(n - 1):
@@ -60,6 +60,35 @@ def check_trajectory(traj, limits=None):
                 "kind": "acceleration",
                 "index": i + 1,
                 "value": acc,
+                "limit": merged["max_accel_mps2"],
+            })
+
+    # Centripetal (lateral) acceleration check. The check above measures
+    # only the rate of change of speed MAGNITUDE, so a constant-speed turn
+    # reads as zero even when the turn itself demands more lateral thrust
+    # than the airframe has. Here the direction change of the velocity
+    # vector between consecutive segments gives the lateral component:
+    # a_lat = speed * dphi / dt, the finite-difference form of curvature
+    # times speed squared. Checked against the same acceleration envelope,
+    # since max_accel_mps2 bounds what the airframe can produce in any
+    # direction. Segments with (near) zero speed have no direction and are
+    # skipped; the tangential check already covers stop-and-go motion.
+    for i in range(n - 2):
+        v1 = seg_vels[i]
+        v2 = seg_vels[i + 1]
+        s1 = seg_speeds[i]
+        s2 = seg_speeds[i + 1]
+        if s1 < 1e-9 or s2 < 1e-9:
+            continue
+        dot = (v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]) / (s1 * s2)
+        dphi = math.acos(max(-1.0, min(1.0, dot)))
+        dt = (traj[i + 2][0] - traj[i][0]) / 2.0
+        lat = 0.5 * (s1 + s2) * dphi / dt
+        if _over(lat, merged["max_accel_mps2"]):
+            violations.append({
+                "kind": "centripetal",
+                "index": i + 1,
+                "value": lat,
                 "limit": merged["max_accel_mps2"],
             })
 

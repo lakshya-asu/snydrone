@@ -110,6 +110,61 @@ def test_constant_velocity_has_no_acceleration_violation():
     assert [x for x in r["violations"] if x["kind"] == "acceleration"] == []
 
 
+# ------------------------------------- centripetal (lateral) acceleration
+
+def circle(radius, speed, hz=2.0, revs=1.0, z=5.0):
+    """A constant-speed circular arc: zero tangential acceleration."""
+    period = 2.0 * math.pi * radius / speed
+    n = max(2, int(period * revs * hz))
+    out = []
+    for i in range(n + 1):
+        t = i / hz
+        theta = (speed / radius) * t
+        out.append((t, radius * math.cos(theta),
+                    radius * math.sin(theta), z, 0.0))
+    return out
+
+
+def test_a_constant_speed_tight_turn_is_caught_as_centripetal():
+    # THE gap the tangential check cannot see: speed magnitude is constant
+    # so |d speed|/dt is zero, but a 1 m radius at 3 m/s demands 9 m/s^2
+    # of lateral thrust against a 6 m/s^2 envelope.
+    r = check_trajectory(circle(radius=1.0, speed=3.0),
+                         limits(max_accel_mps2=6.0))
+    assert [x for x in r["violations"] if x["kind"] == "acceleration"] == [], \
+        "constant speed must not read as tangential acceleration"
+    assert [x for x in r["violations"] if x["kind"] == "centripetal"], (
+        "constant-speed tight turn passed: centripetal load is unchecked")
+
+
+def test_a_gentle_wide_turn_has_no_centripetal_violation():
+    # 10 m radius at 2 m/s is 0.4 m/s^2 of lateral load, nowhere near
+    # the envelope.
+    r = check_trajectory(circle(radius=10.0, speed=2.0),
+                         limits(max_accel_mps2=6.0))
+    assert [x for x in r["violations"] if x["kind"] == "centripetal"] == []
+
+
+def test_centripetal_violation_reports_the_acceleration_envelope():
+    r = check_trajectory(circle(radius=1.0, speed=3.0),
+                         limits(max_accel_mps2=6.0))
+    v = [x for x in r["violations"] if x["kind"] == "centripetal"]
+    assert v
+    assert v[0]["limit"] == 6.0
+    assert v[0]["value"] > 6.0
+    assert isinstance(v[0]["index"], int)
+
+
+def test_hover_segments_have_no_direction_and_are_skipped():
+    # A stationary aircraft has no velocity direction; the centripetal
+    # check must not divide by zero or invent a turn.
+    traj = [(0.0, 0.0, 0.0, 5.0, 0.0),
+            (1.0, 0.0, 0.0, 5.0, 0.0),
+            (2.0, 0.0, 0.0, 5.0, 0.0)]
+    r = check_trajectory(traj, limits())
+    assert [x for x in r["violations"] if x["kind"] == "centripetal"] == []
+
+
 # -------------------------------------------------------------- yaw rate
 
 def test_yaw_rate_is_caught():
