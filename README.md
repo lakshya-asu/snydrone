@@ -62,8 +62,10 @@ flowchart LR
     F --> G["PX4 Offboard Adapter<br/>ENU to NED + mode / arm"]
     G --> H["PX4 + Pegasus + Isaac Sim"]
     H --> I["Onboard Camera Stream"]
-    I --> J["YOLO Tracker"]
+    I --> J["YOLO Tracker<br/>open loop: output not yet consumed"]
 ```
+
+The target pose the executor consumes is the simulator's ground truth. The YOLO tracker publishes its estimate to `/snydrone/vision/track_center`, but nothing subscribes to that topic yet, so vision does not close the loop today.
 
 ## What I Built
 
@@ -108,7 +110,7 @@ sequenceDiagram
     E->>X: PoseStamped setpoints
     X->>S: Offboard mode + trajectory setpoints
     S-->>V: Camera frames
-    V-->>S: Target estimate for tracking
+    Note over V: Publishes detections for visualization.<br/>Not yet fed back into control.
 ```
 
 ## Workspace Layout
@@ -156,7 +158,7 @@ This package contains shot utilities and trajectory helpers.
 
 This package contains the perception layer.
 
-- `tracker_node.py` runs YOLO-based detection on the drone camera stream and publishes normalized target coordinates plus annotated images.
+- `tracker_node.py` runs YOLO-based detection on the drone camera stream and publishes normalized target coordinates plus annotated images. No node subscribes to those coordinates yet: shot execution uses the simulator's ground-truth target pose, so the vision layer is open loop today. Closing that loop is future work.
 
 ### `snydrone_topic_tools`
 
@@ -235,6 +237,16 @@ The project is easiest to understand through three views:
 
 The README diagrams above show the control and software flow that connect those views into one pipeline.
 
+## Verification
+
+The safety layer is measured, not just described. A labelled corpus of shot requests runs through the real pipeline (spec parsing, trajectory sampling, feasibility checking) as pure logic, with no ROS or simulator involved, and the same run gates CI:
+
+- corpus size: 102 cases across five ground-truth labels (nominal, out of limits, infeasible dynamic, infeasible geometric, ambiguous)
+- overall agreement between the system's decisions and the labels: 102 / 102, a fully diagonal confusion matrix
+- swept-path result: 12 keep-out cases whose waypoints are each individually clear of the zone; the swept-path segment check catches 12 of 12, while a per-waypoint checker catches 0 of 12, a delta of 100 percentage points
+
+The feasibility gate behind those numbers checks speed, tangential acceleration, centripetal acceleration, yaw rate, an altitude band, a geofence, and a keep-out cylinder tested along each segment rather than only at waypoints. The spec parser has a strict mode that refuses requests with omitted fields instead of silently filling defaults, which is how the corpus scores underspecified requests. Reproduce the numbers with `python -m snydrone_shots.corpus.evaluate` from `ros2_ws/src/snydrone_shots`.
+
 ## Current State
 
 snydrone is currently a simulation-first prototype, but the main architecture is already implemented:
@@ -242,8 +254,8 @@ snydrone is currently a simulation-first prototype, but the main architecture is
 - prompt-to-shot planning
 - live trajectory generation
 - PX4 offboard command publishing
-- target-aware shot execution
-- camera-based perception
+- target-aware shot execution (driven by simulator ground truth)
+- camera-based perception (open loop: detections are published but not yet fed back into control)
 
 The project is designed so that shot quality, target tracking, and safety logic can continue to improve without rewriting the whole stack.
 
