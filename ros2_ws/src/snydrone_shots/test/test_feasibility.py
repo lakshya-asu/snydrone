@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from snydrone_shots.feasibility import (  # noqa: E402
     DEFAULT_LIMITS,
     check_trajectory,
+    describe_violation,
+    worst_by_kind,
 )
 
 
@@ -155,6 +157,86 @@ def test_centripetal_violation_reports_the_acceleration_envelope():
     assert isinstance(v[0]["index"], int)
 
 
+def test_chord_correction_recovers_the_true_lateral_load():
+    # Raw finite differencing under-reads a curve: a 1 m radius at 2.5 m/s
+    # is truly 6.25 m/s^2 of lateral load, but the 2 Hz chords read 5.85
+    # raw, under the 6.0 envelope, and the turn would pass. The sinc
+    # correction recovers the true value on an arc, so this must refuse.
+    r = check_trajectory(circle(radius=1.0, speed=2.5, hz=2.0),
+                         limits(max_accel_mps2=6.0))
+    v = [x for x in r["violations"] if x["kind"] == "centripetal"]
+    assert v, "sampling under-read let a truly infeasible turn pass"
+    assert v[0]["value"] == pytest.approx(6.25, abs=1e-6)
+
+
+def test_corrected_lateral_load_exactly_at_the_envelope_passes():
+    # 1.5 m radius at 3 m/s is exactly 6.0 m/s^2. At-limit passes, and the
+    # correction must not push the reading spuriously over.
+    r = check_trajectory(circle(radius=1.5, speed=3.0, hz=2.0),
+                         limits(max_accel_mps2=6.0))
+    assert [x for x in r["violations"] if x["kind"] == "centripetal"] == []
+
+
+def test_correction_is_neutral_on_straight_motion():
+    # No direction change, no correction: a straight line stays clean.
+    r = check_trajectory(straight(vx=3.0), limits(max_accel_mps2=6.0))
+    kinds = {x["kind"] for x in r["violations"]}
+    assert "centripetal" not in kinds
+    assert "accel_norm" not in kinds
+
+
+# --------------------------------------------- vector-norm acceleration
+
+def accelerating_circle(radius, v0, a_tan, hz=10.0, duration=1.0, z=5.0):
+    """A circular path with speed ramping at a_tan: both components live."""
+    out = []
+    n = int(duration * hz)
+    for i in range(n + 1):
+        t = i / hz
+        # arc length s = v0 t + a t^2 / 2, angle = s / radius
+        theta = (v0 * t + 0.5 * a_tan * t * t) / radius
+        out.append((t, radius * math.cos(theta),
+                    radius * math.sin(theta), z, 0.0))
+    return out
+
+
+def test_components_each_under_but_norm_over_is_caught():
+    # Tangential 4.5 m/s^2 and lateral 4.4 to 5.4 m/s^2 are each under the
+    # 6.0 envelope, but their vector sum runs 6.3 to 7.0, more total thrust
+    # than the airframe has. Only the norm check can see this. The ramp is
+    # kept short so the lateral component never crosses 6.0 on its own.
+    traj = accelerating_circle(radius=4.0, v0=4.2, a_tan=4.5,
+                               hz=50.0, duration=0.1)
+    r = check_trajectory(traj, limits(max_accel_mps2=6.0,
+                                      max_speed_mps=100.0))
+    kinds = {x["kind"] for x in r["violations"]}
+    assert "acceleration" not in kinds, "tangential alone must be under"
+    assert "centripetal" not in kinds, "lateral alone must be under"
+    assert "accel_norm" in kinds, (
+        "components under, vector sum over: the norm check missed it")
+
+
+def test_norm_is_not_double_reported_when_a_component_already_tripped():
+    # A pure tight turn: centripetal is over on its own, so the norm (which
+    # is then the same number) must not be reported again.
+    r = check_trajectory(circle(radius=1.0, speed=3.0),
+                         limits(max_accel_mps2=6.0))
+    kinds = [x["kind"] for x in r["violations"]]
+    assert "centripetal" in kinds
+    assert "accel_norm" not in kinds
+
+
+# ------------------------------------------------------ non-finite input
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_samples_are_an_error_not_a_pass(bad):
+    # NaN compares false against every limit, so a NaN trajectory would
+    # sail through every check and report ok. That must be an error.
+    traj = [(0.0, 0.0, 0.0, 5.0, 0.0), (1.0, bad, 0.0, 5.0, 0.0)]
+    with pytest.raises(ValueError):
+        check_trajectory(traj, limits())
+
+
 def test_hover_segments_have_no_direction_and_are_skipped():
     # A stationary aircraft has no velocity direction; the centripetal
     # check must not divide by zero or invent a turn.
@@ -259,3 +341,35 @@ def test_violations_are_ordered_by_index():
     r = check_trajectory(straight(n=20, vx=50.0), limits(max_speed_mps=1.0))
     idx = [v["index"] for v in r["violations"]]
     assert idx == sorted(idx)
+
+
+def test_describe_violation_names_the_limit_and_the_margin():
+    # A refusal must say which limit failed and by how much, in units.
+    r = check_trajectory(circle(radius=1.0, speed=3.0),
+                         limits(max_accel_mps2=6.0))
+    v = [x for x in r["violations"] if x["kind"] == "centripetal"][0]
+    text = describe_violation(v)
+    assert "centripetal" in text
+    assert "6.00" in text, "the limit value is not named"
+    assert "m/s^2" in text, "the unit is not named"
+    assert "by 3.00" in text, "the margin over the limit is not named"
+
+
+def test_describe_violation_flips_wording_for_below_a_floor():
+    r = check_trajectory(straight(z=0.2), limits(min_altitude_m=1.0))
+    v = [x for x in r["violations"] if x["kind"] == "altitude"][0]
+    text = describe_violation(v)
+    assert "below" in text
+    assert "by 0.80" in text
+
+
+def test_worst_by_kind_keeps_the_largest_margin_per_kind():
+    # Speeds ramp 10, 20, 30: the worst speed violation is the fastest one.
+    traj = [(0.0, 0.0, 0.0, 5.0, 0.0),
+            (1.0, 10.0, 0.0, 5.0, 0.0),
+            (2.0, 30.0, 0.0, 5.0, 0.0),
+            (3.0, 60.0, 0.0, 5.0, 0.0)]
+    r = check_trajectory(traj, limits(max_speed_mps=1.0,
+                                      max_accel_mps2=1e9))
+    worst = worst_by_kind(r["violations"])
+    assert worst["speed"]["value"] == pytest.approx(30.0)

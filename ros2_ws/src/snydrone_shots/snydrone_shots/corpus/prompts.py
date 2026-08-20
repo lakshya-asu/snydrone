@@ -39,13 +39,12 @@ the spec speed, which the clamp caps at 3.0 m/s, well under the 8.0 m/s
 envelope, and a constant-speed orbit has no tangential acceleration, so
 neither of those can ever be the violated quantity.
 
-One sampling honesty note: the gate measures centripetal load from the
-2.0 Hz waypoint plan, and finite differencing under-reads the true
-continuous value on very tight turns (radius 1 m at 2.5 m/s is truly
-6.25 m/s^2 but reads 5.55 at this rate and passes). Corpus labels state
-what the gate decides at CORPUS_GATE_HZ, so boundary cases are chosen
-where the sampled reading and the true value agree on which side of the
-envelope they fall.
+Sampling honesty, resolved: raw finite differencing under-reads the true
+continuous centripetal value on tight turns (radius 1 m at 2.5 m/s is
+truly 6.25 m/s^2 but the raw 2 Hz chords read 5.85). The checker now
+applies the chord correction (dphi/2)/sin(dphi/2), which recovers the
+true value exactly on a constant arc, so the gate reads the physics, not
+the sampling artifact, and boundary cases can sit at the true envelope.
 
 The swept-path cases command the orbit radius to equal the required
 standoff to the subject. Every waypoint then sits exactly on the standoff
@@ -304,8 +303,8 @@ _DYNAMIC = [
     case("dyn-16", INFEASIBLE_DYNAMIC, orbit(radius=1.4, speed=3.0,
                                              height=4.0, duration_s=6.0,
                                              look_at="none"),
-         rationale="centripetal boundary: 6.43 m/s^2 true, 6.13 sampled, "
-                   "over the envelope on both readings"),
+         rationale="centripetal boundary: 6.43 m/s^2 true, and with the "
+                   "chord correction the gate reads exactly that, over"),
     case("dyn-17", INFEASIBLE_DYNAMIC, orbit(radius=1.2, speed=2.8,
                                              height=4.0, duration_s=6.0,
                                              look_at="none"),

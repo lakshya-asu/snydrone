@@ -17,6 +17,14 @@ def check_trajectory(traj, limits=None):
     if len(traj) < 2:
         raise ValueError("trajectory must have at least 2 samples")
 
+    # A non-finite sample would slide through every limit comparison below
+    # (NaN compares false against everything), so "ok" on such a trajectory
+    # would be the most dangerous possible answer. Refuse to check it.
+    for sample in traj:
+        for value in sample:
+            if not math.isfinite(value):
+                raise ValueError("trajectory contains non-finite values")
+
     for i in range(1, len(traj)):
         if traj[i][0] <= traj[i - 1][0]:
             raise ValueError("timestamps must be strictly increasing")
@@ -51,10 +59,14 @@ def check_trajectory(traj, limits=None):
                 "limit": merged["max_speed_mps"],
             })
 
-    # Acceleration check (between consecutive segments, reported at middle sample)
+    # Acceleration check (between consecutive segments, reported at middle
+    # sample). tang[i] is the tangential component at sample i + 1; kept so
+    # the vector-norm check below can combine it with the lateral one.
+    tang = [0.0] * (n - 2)
     for i in range(n - 2):
         dt = (traj[i + 2][0] - traj[i][0]) / 2.0
         acc = abs(seg_speeds[i + 1] - seg_speeds[i]) / dt
+        tang[i] = acc
         if _over(acc, merged["max_accel_mps2"]):
             violations.append({
                 "kind": "acceleration",
@@ -73,6 +85,16 @@ def check_trajectory(traj, limits=None):
     # since max_accel_mps2 bounds what the airframe can produce in any
     # direction. Segments with (near) zero speed have no direction and are
     # skipped; the tangential check already covers stop-and-go motion.
+    #
+    # Chord correction: sampled chords under-read a curved path. On an arc
+    # the chord speed is the true speed times sinc(dphi/2), so the raw
+    # finite difference reads low by exactly that factor and a coarse gate
+    # rate under-reads tight turns (radius 1 m at 2.5 m/s is truly
+    # 6.25 m/s^2 but reads 5.85 raw at 2 Hz and would pass). Multiplying
+    # by (dphi/2)/sin(dphi/2) recovers the true value exactly on constant
+    # arcs, tends to 1 on straight motion, and is always >= 1, so the
+    # corrected gate is never less strict than the raw one.
+    lats = [0.0] * (n - 2)
     for i in range(n - 2):
         v1 = seg_vels[i]
         v2 = seg_vels[i + 1]
@@ -84,6 +106,9 @@ def check_trajectory(traj, limits=None):
         dphi = math.acos(max(-1.0, min(1.0, dot)))
         dt = (traj[i + 2][0] - traj[i][0]) / 2.0
         lat = 0.5 * (s1 + s2) * dphi / dt
+        if dphi > 1e-9:
+            lat *= (dphi / 2.0) / math.sin(dphi / 2.0)
+        lats[i] = lat
         if _over(lat, merged["max_accel_mps2"]):
             violations.append({
                 "kind": "centripetal",
@@ -91,6 +116,29 @@ def check_trajectory(traj, limits=None):
                 "value": lat,
                 "limit": merged["max_accel_mps2"],
             })
+
+    # Vector-norm acceleration check. The tangential and lateral components
+    # are perpendicular, so the airframe must produce their vector sum. A
+    # trajectory whose components are each under the envelope can still
+    # demand more total acceleration than the envelope allows; that
+    # combination is caught here as its own kind, "accel_norm", against the
+    # same max_accel_mps2 (no new physics constant). Reported only where
+    # neither component already tripped at that sample, so one over-limit
+    # manoeuvre is never double-counted.
+    for i in range(n - 2):
+        norm = math.hypot(tang[i], lats[i])
+        if not _over(norm, merged["max_accel_mps2"]):
+            continue
+        if _over(tang[i], merged["max_accel_mps2"]):
+            continue
+        if _over(lats[i], merged["max_accel_mps2"]):
+            continue
+        violations.append({
+            "kind": "accel_norm",
+            "index": i + 1,
+            "value": norm,
+            "limit": merged["max_accel_mps2"],
+        })
 
     # Yaw rate check (per segment)
     for i in range(n - 1):
@@ -153,6 +201,68 @@ def check_trajectory(traj, limits=None):
     violations.sort(key=lambda v: v["index"])
 
     return {"ok": len(violations) == 0, "violations": violations}
+
+
+# Units per violation kind, for human-readable refusals.
+_UNITS = {
+    "speed": "m/s",
+    "acceleration": "m/s^2",
+    "centripetal": "m/s^2",
+    "accel_norm": "m/s^2",
+    "yaw_rate": "rad/s",
+    "altitude": "m",
+    "geofence": "m",
+    "keep_out": "m",
+}
+
+_KIND_NOUN = {
+    "speed": "speed",
+    "acceleration": "tangential acceleration",
+    "centripetal": "centripetal acceleration",
+    "accel_norm": "total acceleration",
+    "yaw_rate": "yaw rate",
+    "altitude": "altitude",
+    "geofence": "distance from origin",
+    "keep_out": "clearance to the keep-out zone",
+}
+
+
+def describe_violation(v):
+    """One violation as a sentence naming the limit and the margin.
+
+    Every violation dict carries kind, value, and limit; this renders it
+    as e.g. "centripetal acceleration 9.00 m/s^2 exceeds the 6.00 m/s^2
+    limit by 3.00 m/s^2". For the two below-a-floor kinds (altitude under
+    the floor, keep-out clearance) the wording flips to "below the
+    minimum by". The margin is always stated, so a refusal built from
+    these says which limit failed and by how much.
+    """
+    kind = v["kind"]
+    unit = _UNITS.get(kind, "")
+    noun = _KIND_NOUN.get(kind, kind)
+    value = v["value"]
+    limit = v["limit"]
+    if value > limit:
+        return "%s %.2f %s exceeds the %.2f %s limit by %.2f %s" % (
+            noun, value, unit, limit, unit, value - limit, unit)
+    return "%s %.2f %s is below the %.2f %s minimum by %.2f %s" % (
+        noun, value, unit, limit, unit, limit - value, unit)
+
+
+def worst_by_kind(violations):
+    """The single worst violation of each kind, keyed by kind.
+
+    Worst means the largest margin past the limit, whichever side the
+    limit is on. Lets a refusal summarise hundreds of per-sample
+    violations as one line per failed limit.
+    """
+    worst = {}
+    for v in violations:
+        margin = abs(v["value"] - v["limit"])
+        kind = v["kind"]
+        if kind not in worst or margin > abs(worst[kind]["value"] - worst[kind]["limit"]):
+            worst[kind] = v
+    return worst
 
 
 def _over(value, limit):

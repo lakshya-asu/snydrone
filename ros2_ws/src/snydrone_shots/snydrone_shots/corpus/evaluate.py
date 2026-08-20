@@ -65,7 +65,7 @@ from snydrone_shots.corpus.prompts import (  # noqa: E402
 # family is the flight envelope (how the aircraft may move); the geometric
 # family is where it may be (altitude band, geofence, keep-out).
 DYNAMIC_KINDS = frozenset({"speed", "acceleration", "centripetal",
-                           "yaw_rate"})
+                           "accel_norm", "yaw_rate"})
 GEOMETRIC_KINDS = frozenset({"altitude", "geofence", "keep_out"})
 
 # System decisions, one per case.
