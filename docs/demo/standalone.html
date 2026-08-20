@@ -92,6 +92,7 @@
         <button data-preset="prose">wrapped in prose</button>
         <button data-preset="clamp" class="bad">out of range</button>
         <button data-preset="unsafe" class="bad">valid but unsafe</button>
+        <button data-preset="unsafe_noyaw" class="bad">tight turn, no yaw</button>
         <button data-preset="unknown" class="bad">invented shot</button>
         <button data-preset="broken" class="bad">malformed</button>
       </div>
@@ -327,6 +328,205 @@ function orbitSetpoint(target, t, spec) {
   return [x, y, z, yaw];
 }
 
+// Direct port of snydrone_shots/feasibility.py. The Python is the
+// authority; where the two disagree, the Python wins and this is the bug.
+const FLIGHT_LIMITS = {
+  max_speed_mps: 8.0,
+  max_accel_mps2: 6.0,
+  max_yaw_rate_rps: 2.0,
+  min_altitude_m: 0.5,
+  max_altitude_m: 120.0,
+  geofence_radius_m: 100.0,
+  keep_out_centre: [0.0, 0.0],
+  keep_out_radius_m: 0.0,
+};
+
+function over(value, limit) {
+  return value > limit + Math.max(Math.abs(limit), 1.0) * 1e-9;
+}
+
+function below(value, limit) {
+  return value < limit - Math.max(Math.abs(limit), 1.0) * 1e-9;
+}
+
+function pointSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0.0, Math.min(1.0, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function checkTrajectory(traj, limits) {
+  if (traj.length < 2) {
+    throw new RangeError('trajectory must have at least 2 samples');
+  }
+  for (const sample of traj) {
+    for (const value of sample) {
+      if (!Number.isFinite(value)) {
+        throw new RangeError('trajectory contains non-finite values');
+      }
+    }
+  }
+  for (let i = 1; i < traj.length; i++) {
+    if (traj[i][0] <= traj[i - 1][0]) {
+      throw new RangeError('timestamps must be strictly increasing');
+    }
+  }
+
+  const merged = { ...FLIGHT_LIMITS, ...(limits || {}) };
+  const violations = [];
+  const n = traj.length;
+
+  const segVels = [];
+  const segSpeeds = [];
+  for (let i = 0; i < n - 1; i++) {
+    const dt = traj[i + 1][0] - traj[i][0];
+    const vx = (traj[i + 1][1] - traj[i][1]) / dt;
+    const vy = (traj[i + 1][2] - traj[i][2]) / dt;
+    const vz = (traj[i + 1][3] - traj[i][3]) / dt;
+    segVels.push([vx, vy, vz]);
+    segSpeeds.push(Math.hypot(vx, vy, vz));
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    if (over(segSpeeds[i], merged.max_speed_mps)) {
+      violations.push({ kind: 'speed', index: i, value: segSpeeds[i],
+                        limit: merged.max_speed_mps });
+    }
+  }
+
+  // Tangential acceleration, reported at the middle sample.
+  const tang = new Array(Math.max(0, n - 2)).fill(0.0);
+  for (let i = 0; i < n - 2; i++) {
+    const dt = (traj[i + 2][0] - traj[i][0]) / 2.0;
+    const acc = Math.abs(segSpeeds[i + 1] - segSpeeds[i]) / dt;
+    tang[i] = acc;
+    if (over(acc, merged.max_accel_mps2)) {
+      violations.push({ kind: 'acceleration', index: i + 1, value: acc,
+                        limit: merged.max_accel_mps2 });
+    }
+  }
+
+  // Centripetal (lateral) acceleration with the chord correction
+  // (dphi/2)/sin(dphi/2): exact on constant arcs, 1 on straight motion.
+  const lats = new Array(Math.max(0, n - 2)).fill(0.0);
+  for (let i = 0; i < n - 2; i++) {
+    const v1 = segVels[i];
+    const v2 = segVels[i + 1];
+    const s1 = segSpeeds[i];
+    const s2 = segSpeeds[i + 1];
+    if (s1 < 1e-9 || s2 < 1e-9) continue;
+    const dot = (v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]) / (s1 * s2);
+    const dphi = Math.acos(Math.max(-1.0, Math.min(1.0, dot)));
+    const dt = (traj[i + 2][0] - traj[i][0]) / 2.0;
+    let lat = 0.5 * (s1 + s2) * dphi / dt;
+    if (dphi > 1e-9) lat *= (dphi / 2.0) / Math.sin(dphi / 2.0);
+    lats[i] = lat;
+    if (over(lat, merged.max_accel_mps2)) {
+      violations.push({ kind: 'centripetal', index: i + 1, value: lat,
+                        limit: merged.max_accel_mps2 });
+    }
+  }
+
+  // Vector norm of the two perpendicular components, reported only where
+  // neither component tripped on its own.
+  for (let i = 0; i < n - 2; i++) {
+    const norm = Math.hypot(tang[i], lats[i]);
+    if (!over(norm, merged.max_accel_mps2)) continue;
+    if (over(tang[i], merged.max_accel_mps2)) continue;
+    if (over(lats[i], merged.max_accel_mps2)) continue;
+    violations.push({ kind: 'accel_norm', index: i + 1, value: norm,
+                      limit: merged.max_accel_mps2 });
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const dt = traj[i + 1][0] - traj[i][0];
+    const dyaw = traj[i + 1][4] - traj[i][4];
+    const wrapped = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    const rate = Math.abs(wrapped) / dt;
+    if (over(rate, merged.max_yaw_rate_rps)) {
+      violations.push({ kind: 'yaw_rate', index: i, value: rate,
+                        limit: merged.max_yaw_rate_rps });
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const z = traj[i][3];
+    if (below(z, merged.min_altitude_m)) {
+      violations.push({ kind: 'altitude', index: i, value: z,
+                        limit: merged.min_altitude_m });
+    } else if (over(z, merged.max_altitude_m)) {
+      violations.push({ kind: 'altitude', index: i, value: z,
+                        limit: merged.max_altitude_m });
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const r = Math.hypot(traj[i][1], traj[i][2]);
+    if (over(r, merged.geofence_radius_m)) {
+      violations.push({ kind: 'geofence', index: i, value: r,
+                        limit: merged.geofence_radius_m });
+    }
+  }
+
+  if (merged.keep_out_radius_m > 0) {
+    const [cx, cy] = merged.keep_out_centre;
+    for (let i = 0; i < n - 1; i++) {
+      const dist = pointSegmentDistance(
+        cx, cy, traj[i][1], traj[i][2], traj[i + 1][1], traj[i + 1][2]);
+      if (below(dist, merged.keep_out_radius_m)) {
+        violations.push({ kind: 'keep_out', index: i, value: dist,
+                          limit: merged.keep_out_radius_m });
+      }
+    }
+  }
+
+  violations.sort((a, b) => a.index - b.index);
+  return { ok: violations.length === 0, violations };
+}
+
+const VIOLATION_UNITS = {
+  speed: 'm/s', acceleration: 'm/s^2', centripetal: 'm/s^2',
+  accel_norm: 'm/s^2', yaw_rate: 'rad/s', altitude: 'm',
+  geofence: 'm', keep_out: 'm',
+};
+
+const VIOLATION_NOUNS = {
+  speed: 'speed',
+  acceleration: 'tangential acceleration',
+  centripetal: 'centripetal acceleration',
+  accel_norm: 'total acceleration',
+  yaw_rate: 'yaw rate',
+  altitude: 'altitude',
+  geofence: 'distance from origin',
+  keep_out: 'clearance to the keep-out zone',
+};
+
+function describeViolation(v) {
+  const unit = VIOLATION_UNITS[v.kind] || '';
+  const noun = VIOLATION_NOUNS[v.kind] || v.kind;
+  const f = (x) => x.toFixed(2);
+  if (v.value > v.limit) {
+    return `${noun} ${f(v.value)} ${unit} exceeds the ${f(v.limit)} ${unit} ` +
+           `limit by ${f(v.value - v.limit)} ${unit}`;
+  }
+  return `${noun} ${f(v.value)} ${unit} is below the ${f(v.limit)} ${unit} ` +
+         `minimum by ${f(v.limit - v.value)} ${unit}`;
+}
+
+function worstByKind(violations) {
+  const worst = {};
+  for (const v of violations) {
+    const margin = Math.abs(v.value - v.limit);
+    const cur = worst[v.kind];
+    if (!cur || margin > Math.abs(cur.value - cur.limit)) worst[v.kind] = v;
+  }
+  return worst;
+}
+
 function sampleTrajectory(target, spec, hz) {
   if (hz <= 0) {
     throw new RangeError('hz must be positive');
@@ -370,16 +570,17 @@ const PRESETS = {
  "duration_s": 20, "clockwise": true, "look_at": "target"}`,
   unsafe: `{"shot": "orbit", "radius": 1, "height": 2, "speed": 3,
  "duration_s": 8, "clockwise": true, "look_at": "target"}`,
+  unsafe_noyaw: `{"shot": "orbit", "radius": 1.4, "height": 2, "speed": 3,
+ "duration_s": 8, "clockwise": true, "look_at": "none"}`,
   unknown: `{"shot": "barrel_roll", "radius": 5, "duration_s": 10}`,
   broken: `I could not determine a shot for that request.`,
 };
 
 const TARGET = [0, 0, 0];
-const LIMITS = {
-  max_speed_mps: 8, max_accel_mps2: 6, max_yaw_rate_rps: 2,
-  min_altitude_m: 0.5, max_altitude_m: 120, geofence_radius_m: 100,
-  keep_out_radius_m: 2.0,
-};
+// The scene: the flight envelope comes from shotlib's FLIGHT_LIMITS
+// (the port of feasibility.DEFAULT_LIMITS); the demo only adds a 2 m
+// keep-out cylinder around the subject.
+const SCENE_LIMITS = { keep_out_centre: [0, 0], keep_out_radius_m: 2.0 };
 
 const raw = document.getElementById("raw");
 const verdict = document.getElementById("verdict");
@@ -390,30 +591,15 @@ const ctx = canvas.getContext("2d");
 let traj = [];
 let refused = false;
 
-// A local mirror of the Python feasibility rules, enough for the demo.
-// The repo's feasibility.py is the authority; this exists so the page
-// stays dependency-free.
+// The feasibility gate is shotlib's checkTrajectory, the tested port of
+// the flight code's feasibility.py: speed, tangential and centripetal
+// acceleration (with the chord correction), their vector sum, yaw rate,
+// the altitude band, the geofence, and the swept-path keep-out. One
+// line per failed limit, each naming the limit and the margin.
 function feasibility(t) {
-  const out = [];
-  for (let i = 0; i + 1 < t.length; i++) {
-    const a = t[i], b = t[i + 1], dt = b[0] - a[0];
-    const d = Math.hypot(b[1] - a[1], b[2] - a[2], b[3] - a[3]);
-    if (d / dt > LIMITS.max_speed_mps + 1e-9)
-      out.push(`speed ${(d / dt).toFixed(1)} m/s exceeds ${LIMITS.max_speed_mps}`);
-    const dyaw = Math.abs(Math.atan2(Math.sin(b[4] - a[4]), Math.cos(b[4] - a[4]))) / dt;
-    if (dyaw > LIMITS.max_yaw_rate_rps + 1e-9)
-      out.push(`yaw rate ${dyaw.toFixed(2)} rad/s exceeds ${LIMITS.max_yaw_rate_rps}`);
-  }
-  for (const s of t) {
-    if (s[3] < LIMITS.min_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m below floor`); break; }
-    if (s[3] > LIMITS.max_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m above ceiling`); break; }
-  }
-  for (const s of t) {
-    if (Math.hypot(s[1], s[2]) < LIMITS.keep_out_radius_m) {
-      out.push(`enters the ${LIMITS.keep_out_radius_m} m keep-out around the subject`); break;
-    }
-  }
-  return [...new Set(out)];
+  const result = checkTrajectory(t, SCENE_LIMITS);
+  const worst = worstByKind(result.violations);
+  return Object.keys(worst).sort().map(k => describeViolation(worst[k]));
 }
 
 function render() {
@@ -461,8 +647,9 @@ function render() {
       `The path shown is the one that was refused.</div>`
     : `<span class="tag ok">flyable</span>` +
       `<div style="margin-top:6px;font-size:12px;color:var(--dim)">` +
-      `${traj.length} setpoints, checked against speed, yaw rate, altitude ` +
-      `band and the keep-out zone.</div>`;
+      `${traj.length} setpoints, checked against speed, acceleration ` +
+      `(tangential, centripetal, and their vector sum), yaw rate, the ` +
+      `altitude band, the geofence, and the swept-path keep-out zone.</div>`;
   draw();
 }
 

@@ -92,6 +92,7 @@
         <button data-preset="prose">wrapped in prose</button>
         <button data-preset="clamp" class="bad">out of range</button>
         <button data-preset="unsafe" class="bad">valid but unsafe</button>
+        <button data-preset="unsafe_noyaw" class="bad">tight turn, no yaw</button>
         <button data-preset="unknown" class="bad">invented shot</button>
         <button data-preset="broken" class="bad">malformed</button>
       </div>
@@ -125,7 +126,7 @@
 </footer>
 
 <script type="module">
-import { parseShotSpec, sampleTrajectory, ShotSpecError } from "./shotlib.mjs";
+import { parseShotSpec, sampleTrajectory, checkTrajectory, describeViolation, worstByKind, ShotSpecError } from "./shotlib.mjs";
 
 const PRESETS = {
   good: `{"shot": "orbit", "radius": 6, "height": 3, "speed": 0.4,
@@ -139,16 +140,17 @@ const PRESETS = {
  "duration_s": 20, "clockwise": true, "look_at": "target"}`,
   unsafe: `{"shot": "orbit", "radius": 1, "height": 2, "speed": 3,
  "duration_s": 8, "clockwise": true, "look_at": "target"}`,
+  unsafe_noyaw: `{"shot": "orbit", "radius": 1.4, "height": 2, "speed": 3,
+ "duration_s": 8, "clockwise": true, "look_at": "none"}`,
   unknown: `{"shot": "barrel_roll", "radius": 5, "duration_s": 10}`,
   broken: `I could not determine a shot for that request.`,
 };
 
 const TARGET = [0, 0, 0];
-const LIMITS = {
-  max_speed_mps: 8, max_accel_mps2: 6, max_yaw_rate_rps: 2,
-  min_altitude_m: 0.5, max_altitude_m: 120, geofence_radius_m: 100,
-  keep_out_radius_m: 2.0,
-};
+// The scene: the flight envelope comes from shotlib's FLIGHT_LIMITS
+// (the port of feasibility.DEFAULT_LIMITS); the demo only adds a 2 m
+// keep-out cylinder around the subject.
+const SCENE_LIMITS = { keep_out_centre: [0, 0], keep_out_radius_m: 2.0 };
 
 const raw = document.getElementById("raw");
 const verdict = document.getElementById("verdict");
@@ -159,30 +161,15 @@ const ctx = canvas.getContext("2d");
 let traj = [];
 let refused = false;
 
-// A local mirror of the Python feasibility rules, enough for the demo.
-// The repo's feasibility.py is the authority; this exists so the page
-// stays dependency-free.
+// The feasibility gate is shotlib's checkTrajectory, the tested port of
+// the flight code's feasibility.py: speed, tangential and centripetal
+// acceleration (with the chord correction), their vector sum, yaw rate,
+// the altitude band, the geofence, and the swept-path keep-out. One
+// line per failed limit, each naming the limit and the margin.
 function feasibility(t) {
-  const out = [];
-  for (let i = 0; i + 1 < t.length; i++) {
-    const a = t[i], b = t[i + 1], dt = b[0] - a[0];
-    const d = Math.hypot(b[1] - a[1], b[2] - a[2], b[3] - a[3]);
-    if (d / dt > LIMITS.max_speed_mps + 1e-9)
-      out.push(`speed ${(d / dt).toFixed(1)} m/s exceeds ${LIMITS.max_speed_mps}`);
-    const dyaw = Math.abs(Math.atan2(Math.sin(b[4] - a[4]), Math.cos(b[4] - a[4]))) / dt;
-    if (dyaw > LIMITS.max_yaw_rate_rps + 1e-9)
-      out.push(`yaw rate ${dyaw.toFixed(2)} rad/s exceeds ${LIMITS.max_yaw_rate_rps}`);
-  }
-  for (const s of t) {
-    if (s[3] < LIMITS.min_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m below floor`); break; }
-    if (s[3] > LIMITS.max_altitude_m) { out.push(`altitude ${s[3].toFixed(1)} m above ceiling`); break; }
-  }
-  for (const s of t) {
-    if (Math.hypot(s[1], s[2]) < LIMITS.keep_out_radius_m) {
-      out.push(`enters the ${LIMITS.keep_out_radius_m} m keep-out around the subject`); break;
-    }
-  }
-  return [...new Set(out)];
+  const result = checkTrajectory(t, SCENE_LIMITS);
+  const worst = worstByKind(result.violations);
+  return Object.keys(worst).sort().map(k => describeViolation(worst[k]));
 }
 
 function render() {
@@ -230,8 +217,9 @@ function render() {
       `The path shown is the one that was refused.</div>`
     : `<span class="tag ok">flyable</span>` +
       `<div style="margin-top:6px;font-size:12px;color:var(--dim)">` +
-      `${traj.length} setpoints, checked against speed, yaw rate, altitude ` +
-      `band and the keep-out zone.</div>`;
+      `${traj.length} setpoints, checked against speed, acceleration ` +
+      `(tangential, centripetal, and their vector sum), yaw rate, the ` +
+      `altitude band, the geofence, and the swept-path keep-out zone.</div>`;
   draw();
 }
 

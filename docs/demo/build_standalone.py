@@ -21,7 +21,9 @@ SRC = HERE / "index.html"
 LIB = HERE / "shotlib.mjs"
 OUT = HERE / "standalone.html"
 
-IMPORT_LINE = 'import { parseShotSpec, sampleTrajectory, ShotSpecError } from "./shotlib.mjs";'
+IMPORT_LINE = ('import { parseShotSpec, sampleTrajectory, checkTrajectory, '
+               'describeViolation, worstByKind, ShotSpecError } '
+               'from "./shotlib.mjs";')
 
 BANNER = """// --- inlined from shotlib.mjs by build_standalone.py, do not edit here ---
 """
