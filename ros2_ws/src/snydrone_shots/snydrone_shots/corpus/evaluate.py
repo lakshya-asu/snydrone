@@ -109,7 +109,12 @@ def _pipeline(entry):
     """
     raw = json.dumps(entry["spec"])
     try:
-        spec = parse_shot_spec(raw)
+        # Strict mode: a corpus case that omits a required field is
+        # underspecified and must score as AMBIGUOUS, not be silently
+        # completed from DEFAULTS. The flight-side callers (executor and
+        # planner) stay on the lenient default, where filling omissions
+        # from DEFAULTS is the documented planner contract.
+        spec = parse_shot_spec(raw, require_complete=True)
     except ShotSpecError as exc:
         return (
             {

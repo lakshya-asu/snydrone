@@ -56,6 +56,50 @@ def test_supplied_fields_are_not_overwritten_by_defaults():
     assert spec["height"] == DEFAULTS["height"]
 
 
+# ------------------------------------------------- strict (complete) mode
+
+def _complete_raw():
+    import json
+    return json.dumps(dict(DEFAULTS))
+
+
+def test_strict_mode_accepts_a_complete_spec():
+    spec = parse_shot_spec(_complete_raw(), require_complete=True)
+    for key, value in DEFAULTS.items():
+        assert spec[key] == value
+
+
+def test_strict_mode_refuses_an_omitted_field_by_name():
+    with pytest.raises(ShotSpecError) as exc_info:
+        parse_shot_spec('{"shot": "orbit", "radius": 5.0, "height": 4.0, '
+                        '"speed": 1.0, "duration_s": 10.0, '
+                        '"clockwise": true}', require_complete=True)
+    assert "look_at" in str(exc_info.value)
+
+
+def test_strict_mode_names_every_omitted_field():
+    with pytest.raises(ShotSpecError) as exc_info:
+        parse_shot_spec('{"shot": "orbit"}', require_complete=True)
+    message = str(exc_info.value)
+    for field in DEFAULTS:
+        if field == "shot":
+            continue
+        assert field in message, f"missing field {field} not reported"
+
+
+def test_strict_mode_refuses_the_empty_object():
+    with pytest.raises(ShotSpecError):
+        parse_shot_spec("{}", require_complete=True)
+
+
+def test_lenient_mode_stays_the_default():
+    # Existing callers (executor, planner) rely on omissions filling from
+    # DEFAULTS; that contract must not change under them.
+    spec = parse_shot_spec("{}")
+    assert spec["shot"] == DEFAULTS["shot"]
+    assert spec["clamped"] == []
+
+
 # --------------------------------------------------------------- coercion
 
 def test_numeric_strings_are_coerced():

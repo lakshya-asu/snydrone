@@ -94,15 +94,30 @@ def _coerce_bool(value, field):
     )
 
 
-def parse_shot_spec(raw: str) -> dict:
+def parse_shot_spec(raw: str, require_complete: bool = False) -> dict:
     """Parse and validate raw LLM output into a safe shot specification.
 
     Returns a dict with exactly the seven DEFAULTS keys plus a ``clamped``
     key (a list of field names that were clamped into their LIMITS range).
     Raises ShotSpecError for any input that cannot be turned into a safe
     specification.
+
+    By default a missing field is silently filled from DEFAULTS, which is
+    the planner contract: a user who says only "orbit the target" gets the
+    documented default radius and speed. That lenient mode makes
+    underspecification invisible, so ``require_complete=True`` turns on a
+    strict mode that refuses any input omitting one of the seven DEFAULTS
+    fields, naming every omitted field in the error. Use strict mode
+    wherever underspecification must be detected rather than papered over.
     """
     obj = _extract_json_object(raw)
+
+    if require_complete:
+        missing = [key for key in DEFAULTS if key not in obj]
+        if missing:
+            raise ShotSpecError(
+                "Incomplete spec, missing field(s): %s" % ", ".join(missing)
+            )
 
     # Start from defaults; only overwrite with values actually present in obj.
     spec = dict(DEFAULTS)

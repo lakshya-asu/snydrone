@@ -19,8 +19,10 @@ reject the request, or by whether it is admissible at all:
     AMBIGUOUS            underspecified: a value the parser cannot resolve
                          to a definite meaning (a non-canonical shot name,
                          a non-numeric magnitude, an uninterpretable
-                         boolean), so the request is not concrete enough
-                         to execute and is refused at parse.
+                         boolean), or a required field omitted outright,
+                         so the request is not concrete enough to execute
+                         and is refused at strict parse
+                         (require_complete=True).
 
 No physics numbers are invented here. Every threshold is read from
 shot_spec.LIMITS (the clamp layer) and feasibility.DEFAULT_LIMITS (the
@@ -399,59 +401,72 @@ _SWEPT = [
 ]
 
 # ---------------------------------------------------------------------------
-# AMBIGUOUS: a value the parser cannot resolve to a definite meaning. The
-# planner failed to produce a concrete executable field, so the request is
-# refused at parse rather than guessed at.
+# AMBIGUOUS: underspecified in one of two ways. Either a field carries a
+# value the parser cannot resolve to a definite meaning (a non-canonical
+# shot name, a relative word instead of a magnitude, an uninterpretable
+# boolean), or a required field is omitted outright. Both are refused at
+# parse under strict mode (require_complete=True), which is how the
+# evaluation harness runs the corpus; the lenient default would silently
+# fill omissions from DEFAULTS and make them undetectable. The bad-value
+# cases are complete seven-field specs so the unresolvable value, not an
+# incidental omission, is what trips.
 # ---------------------------------------------------------------------------
+def _bad(field, value):
+    """A complete, otherwise-valid orbit spec with one unresolvable field."""
+    spec = orbit(radius=5.0, height=4.0, speed=1.0, duration_s=10.0)
+    spec[field] = value
+    return spec
+
+
 _AMBIGUOUS = [
-    case("amb-01", AMBIGUOUS,
-         {"shot": "circle", "radius": 5.0, "height": 4.0, "speed": 1.0},
+    case("amb-01", AMBIGUOUS, _bad("shot", "circle"),
          rationale="'circle' is not a canonical shot name, cannot resolve"),
-    case("amb-02", AMBIGUOUS,
-         {"shot": "spiral", "radius": 5.0, "height": 4.0},
+    case("amb-02", AMBIGUOUS, _bad("shot", "spiral"),
          rationale="'spiral' is not in the shot vocabulary"),
-    case("amb-03", AMBIGUOUS,
-         {"shot": "flyby", "radius": 6.0, "speed": 1.0},
+    case("amb-03", AMBIGUOUS, _bad("shot", "flyby"),
          rationale="'flyby' is not an implemented shot type"),
-    case("amb-04", AMBIGUOUS,
-         {"shot": "cinematic", "radius": 5.0},
+    case("amb-04", AMBIGUOUS, _bad("shot", "cinematic"),
          rationale="'cinematic' names a mood, not a shot"),
-    case("amb-05", AMBIGUOUS,
-         {"shot": "", "radius": 5.0, "height": 4.0},
+    case("amb-05", AMBIGUOUS, _bad("shot", ""),
          rationale="empty shot string, nothing to execute"),
-    case("amb-06", AMBIGUOUS,
-         {"shot": "orbit", "radius": "close", "height": 4.0},
+    case("amb-06", AMBIGUOUS, _bad("radius", "close"),
          rationale="'close' radius is a relative word, not a magnitude"),
-    case("amb-07", AMBIGUOUS,
-         {"shot": "orbit", "radius": "wide", "speed": 1.0},
+    case("amb-07", AMBIGUOUS, _bad("radius", "wide"),
          rationale="'wide' radius cannot be parsed to metres"),
-    case("amb-08", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "speed": "fast"},
+    case("amb-08", AMBIGUOUS, _bad("speed", "fast"),
          rationale="'fast' speed is unit-free and unresolvable"),
-    case("amb-09", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "speed": "slow"},
+    case("amb-09", AMBIGUOUS, _bad("speed", "slow"),
          rationale="'slow' speed cannot be parsed to a number"),
-    case("amb-10", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "height": "high"},
+    case("amb-10", AMBIGUOUS, _bad("height", "high"),
          rationale="'high' height is a relative word, not metres"),
-    case("amb-11", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "clockwise": "maybe"},
+    case("amb-11", AMBIGUOUS, _bad("clockwise", "maybe"),
          rationale="'maybe' is neither true nor false"),
-    case("amb-12", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "clockwise": "clockwise"},
+    case("amb-12", AMBIGUOUS, _bad("clockwise", "clockwise"),
          rationale="'clockwise' is not a boolean the coercer accepts"),
-    case("amb-13", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "look_at": "subject"},
+    case("amb-13", AMBIGUOUS, _bad("look_at", "subject"),
          rationale="'subject' is not a valid look_at (target or none)"),
-    case("amb-14", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "look_at": "car"},
+    case("amb-14", AMBIGUOUS, _bad("look_at", "car"),
          rationale="'car' names an object, not a valid look_at mode"),
-    case("amb-15", AMBIGUOUS,
-         {"shot": "orbit", "radius": 5.0, "duration_s": "long"},
+    case("amb-15", AMBIGUOUS, _bad("duration_s", "long"),
          rationale="'long' duration cannot be parsed to seconds"),
-    case("amb-16", AMBIGUOUS,
-         {"radius": 5.0, "height": 4.0, "speed": "medium", "shot": "orbit"},
+    case("amb-16", AMBIGUOUS, _bad("speed", "medium"),
          rationale="'medium' speed is unresolvable"),
+    # Underspecification by omission: fields are simply missing. Only the
+    # strict parse path can see these; the lenient default would fill them
+    # from DEFAULTS and fly a shot the user never fully specified.
+    case("amb-17", AMBIGUOUS, {"shot": "orbit"},
+         rationale="only the shot type given, all six parameters omitted"),
+    case("amb-18", AMBIGUOUS,
+         {"shot": "orbit", "radius": 5.0, "height": 4.0},
+         rationale="speed, duration, direction, and look_at all omitted"),
+    case("amb-19", AMBIGUOUS,
+         {"shot": "orbit", "radius": 5.0, "height": 4.0, "speed": 1.0,
+          "duration_s": 10.0, "clockwise": True},
+         rationale="a single omission: look_at is missing"),
+    case("amb-20", AMBIGUOUS, {"shot": "orbit", "duration_s": 12.0},
+         rationale="a duration with no geometry: radius and height omitted"),
+    case("amb-21", AMBIGUOUS, {"radius": 6.0, "speed": 1.0},
+         rationale="no shot type at all, nothing says what to fly"),
 ]
 
 CORPUS = (

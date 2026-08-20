@@ -67,7 +67,9 @@ def _limits_for(env):
 
 
 def _parse(entry):
-    return parse_shot_spec(json.dumps(entry["spec"]))
+    # Strict mode, mirroring the evaluation harness: omitted fields are
+    # underspecification, not an invitation to fill in DEFAULTS.
+    return parse_shot_spec(json.dumps(entry["spec"]), require_complete=True)
 
 
 def _sample_and_check(entry, spec):
@@ -187,6 +189,37 @@ def test_every_ambiguous_case_is_refused_at_parse():
     for c in prompts.by_label(AMBIGUOUS):
         with pytest.raises(ShotSpecError):
             _parse(c)
+
+
+def test_omission_cases_are_refused_naming_the_missing_fields():
+    # The strict path must not just refuse an underspecified request; it
+    # must say which fields were omitted, so the refusal is actionable.
+    from snydrone_brain.shot_spec import DEFAULTS
+    omission_cases = [c for c in prompts.by_label(AMBIGUOUS)
+                      if any(k not in c["spec"] for k in DEFAULTS)]
+    assert omission_cases, "the corpus has no omission cases"
+    for c in omission_cases:
+        missing = [k for k in DEFAULTS if k not in c["spec"]]
+        with pytest.raises(ShotSpecError) as exc_info:
+            _parse(c)
+        for field in missing:
+            assert field in str(exc_info.value), (
+                "omission case %s: refusal does not name missing field %r"
+                % (c["id"], field))
+
+
+def test_omission_cases_would_pass_the_lenient_parser():
+    # The honesty point of the omission lane: the lenient default fills
+    # these from DEFAULTS and happily returns a flyable spec, which is
+    # exactly why underspecification was undetectable before strict mode.
+    # Every value the omission cases DO carry is valid, so lenient parse
+    # must succeed on all of them; only the strict path refuses them.
+    from snydrone_brain.shot_spec import DEFAULTS
+    omission_cases = [c for c in prompts.by_label(AMBIGUOUS)
+                      if any(k not in c["spec"] for k in DEFAULTS)]
+    for c in omission_cases:
+        spec = parse_shot_spec(json.dumps(c["spec"]))
+        assert set(spec) == set(DEFAULTS) | {"clamped"}, c["id"]
 
 
 # ----------------------------------------------------------- swept-path
