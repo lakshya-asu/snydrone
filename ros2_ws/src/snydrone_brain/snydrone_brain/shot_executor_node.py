@@ -9,7 +9,11 @@ from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 
 from snydrone_brain.shot_spec import ShotSpecError, parse_shot_spec
-from snydrone_shots.feasibility import check_trajectory
+from snydrone_shots.feasibility import (
+    check_trajectory,
+    describe_violation,
+    worst_by_kind,
+)
 from snydrone_shots.orbit_geometry import orbit_setpoint, yaw_to_quaternion
 from snydrone_shots.trajectory import sample_trajectory
 
@@ -165,20 +169,29 @@ class ShotExecutorNode(Node):
                 f"preflight ok: {len(traj)} samples inside the envelope")
             return True
 
+        # One line per failed limit, worst case of each kind, each naming
+        # the limit that failed and by how much (value, limit, margin,
+        # units). This is the actionable part of the refusal; the full
+        # per-sample violation list rides along for tooling.
+        worst = worst_by_kind(result["violations"])
+        summary = [describe_violation(worst[k]) for k in sorted(worst)]
+
         refusal = {
             "refused": True,
             "spec": {k: spec[k] for k in spec},
+            "summary": summary,
             "violations": result["violations"],
         }
         msg = String()
         msg.data = json.dumps(refusal)
         self.pub_rejected.publish(msg)
 
-        kinds = sorted({v["kind"] for v in result["violations"]})
         self.get_logger().error(
             f"REFUSED to fly: {len(result['violations'])} violation(s) "
-            f"({', '.join(kinds)}); spec dropped, refusal published on "
-            f"/snydrone/shot/rejected")
+            f"across {len(worst)} limit(s); spec dropped, refusal "
+            f"published on /snydrone/shot/rejected")
+        for line in summary:
+            self.get_logger().error(f"  {line}")
 
         self.current_spec = None
         return False
